@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Build output
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
