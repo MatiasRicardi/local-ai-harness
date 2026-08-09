@@ -4,6 +4,7 @@ import { ref } from "vue"
 interface Props {
   onSend: (text: string) => void
   textPlaceholder?: string
+  sending?: boolean
 }
 
 const props = defineProps<Props>()
@@ -12,6 +13,7 @@ const text = ref("")
 function handleSend() {
   if (text.value.trim()) {
     props.onSend(text.value.trim())
+    text.value = ""
   }
 }
 
@@ -28,6 +30,7 @@ function handleEnter(event: KeyboardEvent) {
     <textarea
       v-model="text"
       :placeholder="textPlaceholder"
+      :disabled="sending"
       @keydown.ctrl.enter="handleSend"
       @keydown.meta.enter="handleSend"
       @keydown.enter="handleEnter"
@@ -37,6 +40,7 @@ function handleEnter(event: KeyboardEvent) {
     <button
       type="button"
       class="chat-input-send"
+      :disabled="sending"
       @click="handleSend"
     >
       Send

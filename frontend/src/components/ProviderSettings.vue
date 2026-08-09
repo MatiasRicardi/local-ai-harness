@@ -1,23 +1,16 @@
 <script setup lang="ts">
 import { reactive } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
+import { getProviderSettings } from "../composables/useProviderSettings"
 
 const STORAGE_KEY = "local-ai-harness-provider-settings"
 
-const defaults = {
-  name: "llama.cpp",
-  baseUrl: "http://localhost:8080/v1",
-  model: "local-model",
-  apiKey: "",
-  timeout: 120,
-}
-
 const state = reactive({
-  name: defaults.name,
-  baseUrl: defaults.baseUrl,
-  model: defaults.model,
-  apiKey: defaults.apiKey,
-  timeout: defaults.timeout,
+  name: getProviderSettings().name,
+  baseUrl: getProviderSettings().baseUrl,
+  model: getProviderSettings().model,
+  apiKey: getProviderSettings().apiKey,
+  timeout: getProviderSettings().timeout,
   status: "" as
     | ""
     | "testing"
@@ -35,23 +28,6 @@ const saveToStorage = () => {
     apiKey: state.apiKey,
     timeout: state.timeout,
   }))
-}
-
-const loadFromStorage = () => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const parsed = JSON.parse(saved) as Partial<typeof state>
-      state.name = parsed.name ?? defaults.name
-      state.baseUrl = parsed.baseUrl ?? defaults.baseUrl
-      state.model = parsed.model ?? defaults.model
-      state.apiKey = parsed.apiKey ?? defaults.apiKey
-      state.timeout = parsed.timeout ?? defaults.timeout
-    }
-  } catch {
-    // Ignore corrupt storage
-  }
-  saveToStorage()
 }
 
 const handleTest = async () => {
@@ -75,6 +51,13 @@ const handleTest = async () => {
       state.status = "success"
       state.message = `Connected to ${response.model}`
       saveToStorage()
+      // Update the singleton settings
+      const s = getProviderSettings()
+      s.name = state.name
+      s.baseUrl = state.baseUrl
+      s.model = state.model
+      s.apiKey = state.apiKey
+      s.timeout = state.timeout
     } else {
       state.status = "error"
       state.message = response.error || "Connection failed"
@@ -88,8 +71,6 @@ const handleTest = async () => {
     state.testing = false
   }
 }
-
-loadFromStorage()
 </script>
 
 <template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue"
-import { chat, type ChatMessage, type ChatResponse } from "./services/chat"
+import { chat, type ChatMessage, type ChatResponse, type ChatProviderConfig } from "./services/chat"
+import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import ChatMessages from "./components/ChatMessages.vue"
 import type { Message } from "./types"
@@ -11,6 +12,8 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const sending = ref(false)
 const messagesEnd = ref<HTMLElement | null>(null)
+
+const providerSettings = useProviderSettings()
 
 // Initialize refs from DOM after mount
 onMounted(() => {
@@ -49,7 +52,14 @@ async function handleSend(text: string) {
   sending.value = true
 
   try {
-    const response: ChatResponse = await chat(allMessages)
+    const provider: ChatProviderConfig = {
+      baseUrl: providerSettings.baseUrl,
+      model: providerSettings.model,
+      apiKey: providerSettings.apiKey || undefined,
+      timeoutMs: providerSettings.timeout * 1000,
+    }
+
+    const response: ChatResponse = await chat(allMessages, provider)
 
     if (!response.success) {
       error.value = response.error || "Error al enviar el mensaje."
@@ -85,10 +95,9 @@ async function handleSend(text: string) {
     <main class="main">
       <ProviderSettings />
       <section class="chat-panel">
-        <div id="messages-end">
-          <ChatMessages :messages="messages" :loading="loading" :error="error" />
-        </div>
-        <ChatInput @send="handleSend" :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'" />
+        <ChatMessages :messages="messages" :loading="loading" :error="error" />
+        <div id="messages-end" />
+        <ChatInput :on-send="handleSend" :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'" :sending="sending" />
       </section>
     </main>
   </div>

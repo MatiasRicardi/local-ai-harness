@@ -21,10 +21,20 @@ export interface ChatResponse {
   error?: string
 }
 
+export interface ChatProviderConfig {
+  baseUrl: string
+  model: string
+  apiKey?: string
+  timeoutMs: number
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
-export async function chat(messages: ChatMessage[]): Promise<ChatResponse> {
-  const provider = {
+export async function chat(
+  messages: ChatMessage[],
+  provider?: ChatProviderConfig,
+): Promise<ChatResponse> {
+  const config = provider ?? {
     baseUrl: import.meta.env.VITE_API_URL ?? "",
     model: "",
     apiKey: "",
@@ -35,7 +45,7 @@ export async function chat(messages: ChatMessage[]): Promise<ChatResponse> {
   const response = await fetch(apiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, provider }),
+    body: JSON.stringify({ messages, provider: config }),
   })
 
   if (!response.ok) {
