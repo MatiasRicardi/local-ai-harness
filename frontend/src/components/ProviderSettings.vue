@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive } from "vue"
+import { reactive, watch } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
 import { getProviderSettings } from "../composables/useProviderSettings"
 
@@ -19,6 +19,27 @@ const state = reactive({
   message: "",
   testing: false,
 })
+
+// Watch for changes and sync to singleton + localStorage
+watch(
+  () => [state.name, state.baseUrl, state.model, state.apiKey, state.timeout],
+  () => {
+    const s = getProviderSettings()
+    s.name = state.name
+    s.baseUrl = state.baseUrl
+    s.model = state.model
+    s.apiKey = state.apiKey
+    s.timeout = state.timeout
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      name: state.name,
+      baseUrl: state.baseUrl,
+      model: state.model,
+      apiKey: state.apiKey,
+      timeout: state.timeout,
+    }))
+  },
+  { immediate: false }
+)
 
 const saveToStorage = () => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -51,13 +72,6 @@ const handleTest = async () => {
       state.status = "success"
       state.message = `Connected to ${response.model}`
       saveToStorage()
-      // Update the singleton settings
-      const s = getProviderSettings()
-      s.name = state.name
-      s.baseUrl = state.baseUrl
-      s.model = state.model
-      s.apiKey = state.apiKey
-      s.timeout = state.timeout
     } else {
       state.status = "error"
       state.message = response.error || "Connection failed"

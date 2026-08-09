@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { ref, onMounted } from "vue"
 import { chat, type ChatMessage, type ChatResponse, type ChatProviderConfig } from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import ChatMessages from "./components/ChatMessages.vue"
+import ChatInput from "./components/ChatInput.vue"
 import type { Message } from "./types"
-import { onMounted } from "vue"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
@@ -59,6 +59,8 @@ async function handleSend(text: string) {
       timeoutMs: providerSettings.timeout * 1000,
     }
 
+    // When called without a provider, the fallback uses the backend URL as baseUrl.
+    // This is intentional for the initial chat service before provider settings are configured.
     const response: ChatResponse = await chat(allMessages, provider)
 
     if (!response.success) {

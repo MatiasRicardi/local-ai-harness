@@ -1,4 +1,4 @@
-import { reactive, readonly } from "vue"
+import { reactive } from "vue"
 
 const STORAGE_KEY = "local-ai-harness-provider-settings"
 const defaults = {
@@ -49,5 +49,5 @@ export function getProviderSettings(): ProviderSettings {
 }
 
 export function useProviderSettings() {
-  return readonly(getProviderSettings())
+  return getProviderSettings()
 }
