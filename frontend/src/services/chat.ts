@@ -32,14 +32,9 @@ const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
 export async function chat(
   messages: ChatMessage[],
-  provider?: ChatProviderConfig,
+  provider: ChatProviderConfig,
 ): Promise<ChatResponse> {
-  const config = provider ?? {
-    baseUrl: import.meta.env.VITE_API_URL ?? "",
-    model: "",
-    apiKey: "",
-    timeoutMs: 120_000,
-  }
+  const config = provider
 
   const apiUrl = `${API_BASE}/api/chat`
   const response = await fetch(apiUrl, {

@@ -1,6 +1,6 @@
 import { reactive } from "vue"
 
-const STORAGE_KEY = "local-ai-harness-provider-settings"
+export const STORAGE_KEY = "local-ai-harness-provider-settings"
 const defaults = {
   name: "llama.cpp",
   baseUrl: "http://localhost:8080/v1",

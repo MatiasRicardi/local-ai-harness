@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { reactive, watch } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
-import { getProviderSettings } from "../composables/useProviderSettings"
-
-const STORAGE_KEY = "local-ai-harness-provider-settings"
+import { getProviderSettings, STORAGE_KEY } from "../composables/useProviderSettings"
 
 const state = reactive({
   name: getProviderSettings().name,
@@ -41,16 +39,6 @@ watch(
   { immediate: false }
 )
 
-const saveToStorage = () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    name: state.name,
-    baseUrl: state.baseUrl,
-    model: state.model,
-    apiKey: state.apiKey,
-    timeout: state.timeout,
-  }))
-}
-
 const handleTest = async () => {
   if (!state.baseUrl || !state.model) return
 
@@ -71,16 +59,16 @@ const handleTest = async () => {
     if (response.success) {
       state.status = "success"
       state.message = `Connected to ${response.model}`
-      saveToStorage()
+      // watch() handler syncs to singleton + localStorage automatically
     } else {
       state.status = "error"
       state.message = response.error || "Connection failed"
-      saveToStorage()
+      // watch() handler syncs to singleton + localStorage automatically
     }
   } catch (err) {
     state.status = "error"
     state.message = err instanceof Error ? err.message : "Connection failed"
-    saveToStorage()
+    // watch() handler syncs to singleton + localStorage automatically
   } finally {
     state.testing = false
   }

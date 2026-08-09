@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue"
+import { ref } from "vue"
 import { chat, type ChatMessage, type ChatResponse, type ChatProviderConfig } from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
@@ -11,22 +11,16 @@ const messages = ref<Message[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const sending = ref(false)
-const messagesEnd = ref<HTMLElement | null>(null)
+const messagesEnd = ref<HTMLElement>()
 
 const providerSettings = useProviderSettings()
 
-// Initialize refs from DOM after mount
-onMounted(() => {
-  const el = document.getElementById('messages-end')
-  if (el) messagesEnd.value = el
-})
+function scrollToBottom() {
+  messagesEnd.value?.scrollIntoView({ behavior: "smooth" })
+}
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9)
-}
-
-function scrollToBottom() {
-  messagesEnd.value?.scrollIntoView({ behavior: "smooth" })
 }
 
 async function handleSend(text: string) {
@@ -59,8 +53,6 @@ async function handleSend(text: string) {
       timeoutMs: providerSettings.timeout * 1000,
     }
 
-    // When called without a provider, the fallback uses the backend URL as baseUrl.
-    // This is intentional for the initial chat service before provider settings are configured.
     const response: ChatResponse = await chat(allMessages, provider)
 
     if (!response.success) {
@@ -98,7 +90,7 @@ async function handleSend(text: string) {
       <ProviderSettings />
       <section class="chat-panel">
         <ChatMessages :messages="messages" :loading="loading" :error="error" />
-        <div id="messages-end" />
+        <div ref="messagesEnd" />
         <ChatInput :on-send="handleSend" :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'" :sending="sending" />
       </section>
     </main>
