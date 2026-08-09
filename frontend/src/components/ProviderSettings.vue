@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, watch } from "vue"
+import { reactive, ref, watch, onMounted, onUnmounted } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
 import { getProviderSettings, STORAGE_KEY } from "../composables/useProviderSettings"
 
@@ -20,23 +20,46 @@ const state = reactive({
   testing: false,
 })
 
-// Watch for changes and sync to singleton + localStorage
+const pending = ref(false)
+const timer = ref<number | null>(null)
+
+const doSync = () => {
+  if (pending.value) return
+  pending.value = true
+  if (!timer.value) {
+    timer.value = setTimeout(() => {
+      settings.name = state.name
+      settings.baseUrl = state.baseUrl
+      settings.model = state.model
+      settings.apiKey = state.apiKey
+      settings.timeout = state.timeout
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        name: state.name,
+        baseUrl: state.baseUrl,
+        model: state.model,
+        apiKey: state.apiKey,
+        timeout: state.timeout,
+      }))
+      timer.value = null
+      pending.value = false
+    }, 300)
+  }
+}
+
+// Sync initial values on mount
+onMounted(() => {
+  doSync()
+})
+
+// Clean up timer on unmount
+onUnmounted(() => {
+  timer.value = null
+})
+
+// Watch for changes and sync with debounce
 watch(
   () => [state.name, state.baseUrl, state.model, state.apiKey, state.timeout],
-  () => {
-    settings.name = state.name
-    settings.baseUrl = state.baseUrl
-    settings.model = state.model
-    settings.apiKey = state.apiKey
-    settings.timeout = state.timeout
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      name: state.name,
-      baseUrl: state.baseUrl,
-      model: state.model,
-      apiKey: state.apiKey,
-      timeout: state.timeout,
-    }))
-  },
+  doSync,
   { immediate: false }
 )
 
