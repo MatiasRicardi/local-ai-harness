@@ -3,12 +3,14 @@ import { reactive, watch } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
 import { getProviderSettings, STORAGE_KEY } from "../composables/useProviderSettings"
 
+const settings = getProviderSettings()
+
 const state = reactive({
-  name: getProviderSettings().name,
-  baseUrl: getProviderSettings().baseUrl,
-  model: getProviderSettings().model,
-  apiKey: getProviderSettings().apiKey,
-  timeout: getProviderSettings().timeout,
+  name: settings.name,
+  baseUrl: settings.baseUrl,
+  model: settings.model,
+  apiKey: settings.apiKey,
+  timeout: settings.timeout,
   status: "" as
     | ""
     | "testing"
@@ -22,12 +24,11 @@ const state = reactive({
 watch(
   () => [state.name, state.baseUrl, state.model, state.apiKey, state.timeout],
   () => {
-    const s = getProviderSettings()
-    s.name = state.name
-    s.baseUrl = state.baseUrl
-    s.model = state.model
-    s.apiKey = state.apiKey
-    s.timeout = state.timeout
+    settings.name = state.name
+    settings.baseUrl = state.baseUrl
+    settings.model = state.model
+    settings.apiKey = state.apiKey
+    settings.timeout = state.timeout
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       name: state.name,
       baseUrl: state.baseUrl,

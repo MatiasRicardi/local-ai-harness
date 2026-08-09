@@ -12,10 +12,6 @@ defineProps<Props>()
 
 <template>
   <div class="chat-messages">
-    <div v-if="loading" class="loading">
-      <span>Generando...</span>
-    </div>
-
     <div v-if="error" class="error">
       <p>{{ error }}</p>
     </div>
@@ -25,6 +21,10 @@ defineProps<Props>()
         <div class="message-role">{{ msg.role }}</div>
         <div class="message-text">{{ msg.content }}</div>
       </div>
+    </div>
+
+    <div v-if="loading" class="loading">
+      <span>Generando...</span>
     </div>
   </div>
 </template>

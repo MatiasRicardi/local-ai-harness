@@ -34,13 +34,11 @@ export async function chat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,
 ): Promise<ChatResponse> {
-  const config = provider
-
   const apiUrl = `${API_BASE}/api/chat`
   const response = await fetch(apiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, provider: config }),
+    body: JSON.stringify({ messages, provider }),
   })
 
   if (!response.ok) {
