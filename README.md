@@ -1,50 +1,42 @@
-# Local AI Harness
+# 🤖 Local AI Harness
 
-> ⚠️ **Project in development — Reference code** ⚠️
+This project is a web chat application designed to interact with **local AI models**.
 
-This repository contains a lightweight web application for connecting with local language models through an OpenAI-compatible API.
+The goal is to provide an interface where users can share **text, images, and documents** with the model, while also providing external tools such as **web search** and other integrations.
 
-## 🧠 Purpose
+The project has been primarily tested using **Qwen 3.6 35B**.
 
-This project has a clear goal: **learning**.
+## 🎯 Motivation
 
-I am investigating how to integrate a local language model (LLM) into a web application, and this repository is the result of that learning process. It is not a finished product or production software.
+The idea behind this project is to learn and experiment with integrating artificial intelligence models into a real application.
 
-### What are you seeing here?
+The architecture was designed to work with **OpenAI-compatible APIs**, allowing different local models and servers that implement this format to be used.
 
-- Real-time chat with streaming responses
-- Configuration of local providers (llama.cpp, Ollama, LM Studio, etc.)
-- Text and PDF file uploads
-- Monorepo architecture with strict TypeScript
+This is a **100% educational project**. It may contain bugs, incomplete features, and design decisions that may not be 100% correct.
 
-### ⚠️ Important Warning
+**It is not intended for use in production environments.**
 
-**This project may have bugs and performance issues.**
+## 🤖 AI-Assisted Development
 
-It is being built step by step as part of a learning process. It is not a product ready for production. If you find bugs, that is part of the process — and bug reports are welcome.
+A large part of the development was done using **Ornith 1.0 35B** as a local coding agent.
+
+My role was to design the architecture, plan the development, fix some bugs that the agent struggled to identify, and implement a few features myself just so I wouldn't get bored.
+
+This project also served as a way to test the idea of whether a **relatively small LLM**, used as a coding agent, could be effective when developing a real-world project.
 
 ## 🛠️ Tech Stack
 
-- **Monorepo**: pnpm workspace
-- **Backend**: Node.js, TypeScript, Fastify, Zod
-- **Frontend**: Vue 3, TypeScript, Vite
-- **Testing**: Vitest
-
-## 📋 Current Status
-
-This is an in-progress project. The following areas are pending implementation:
-
-- [ ] **Frontend tests** — No tests implemented yet in the Vue layer
-- [ ] **Broader test coverage** — Backend tests cover error cases, but complete chat/streaming scenarios are missing
-- [ ] **Performance optimization** — Streaming may have latency issues in certain configurations
-- [ ] **Documentation of known issues** — Will be added as they are discovered
+* **Monorepo**: pnpm workspace
+* **Backend**: Node.js, TypeScript, Fastify, Zod
+* **Frontend**: Vue 3, TypeScript, Vite
+* **Testing**: Vitest
 
 ## 🚀 Getting Started
 
 ### Prerequisites
 
-- Node.js >= 22.0.0
-- pnpm >= 8.0.0
+* Node.js >= 22.0.0
+* pnpm >= 8.0.0
 
 ### Installation
 
@@ -65,10 +57,6 @@ pnpm dev:frontend
 pnpm dev
 ```
 
-## 📝 About this project
-
-- **Built by me**: This project is my own work, built step by step as part of my learning in software development.
-- **Ornith 1.0 9B support**: The implementation received support from the local language model Ornith 1.0 9B, used as a code assistant to review, correct, and improve the code.
-
 ## 📄 License
+
 MIT
