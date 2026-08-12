@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { reactive, ref, watch, onUnmounted } from "vue"
+import { ref, watch, onUnmounted } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
-import { getProviderSettings, STORAGE_KEY } from "../composables/useProviderSettings"
+import { getProviderSettings, updateProviderSettings } from "../composables/useProviderSettings"
 
 const settings = getProviderSettings()
 
-const state = reactive({
-  name: settings.name,
-  baseUrl: settings.baseUrl,
-  model: settings.model,
-  apiKey: settings.apiKey,
-  timeout: settings.timeout,
+const state = ref({
+  name: settings.value.name,
+  baseUrl: settings.value.baseUrl,
+  model: settings.value.model,
+  apiKey: settings.value.apiKey,
+  timeout: settings.value.timeout,
   status: "" as
     | ""
     | "testing"
@@ -25,18 +25,13 @@ const timer = ref<number | undefined>(undefined)
 const doSync = () => {
   if (timer.value) return
   timer.value = setTimeout(() => {
-    settings.name = state.name
-    settings.baseUrl = state.baseUrl
-    settings.model = state.model
-    settings.apiKey = state.apiKey
-    settings.timeout = state.timeout
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      name: state.name,
-      baseUrl: state.baseUrl,
-      model: state.model,
-      apiKey: state.apiKey,
-      timeout: state.timeout,
-    }))
+    updateProviderSettings({
+      name: state.value.name,
+      baseUrl: state.value.baseUrl,
+      model: state.value.model,
+      apiKey: state.value.apiKey,
+      timeout: state.value.timeout,
+    })
     timer.value = undefined
   }, 300)
 }
@@ -49,43 +44,40 @@ onUnmounted(() => {
 
 // Watch for changes and sync with debounce
 watch(
-  () => [state.name, state.baseUrl, state.model, state.apiKey, state.timeout],
+  () => [state.value.name, state.value.baseUrl, state.value.model, state.value.apiKey, state.value.timeout],
   doSync,
   { immediate: false }
 )
 
 const handleTest = async () => {
-  if (!state.baseUrl || !state.model) return
+  if (!state.value.baseUrl || !state.value.model) return
 
-  state.status = "testing"
-  state.message = ""
-  state.testing = true
+  state.value.status = "testing"
+  state.value.message = ""
+  state.value.testing = true
 
   try {
     const payload: ProviderTestRequest = {
-      baseUrl: state.baseUrl,
-      model: state.model,
-      apiKey: state.apiKey || undefined,
-      timeout: state.timeout * 1000,
+      baseUrl: state.value.baseUrl,
+      model: state.value.model,
+      apiKey: state.value.apiKey || undefined,
+      timeout: state.value.timeout * 1000,
     }
 
     const response = await testProviderConnection(payload)
 
     if (response.success) {
-      state.status = "success"
-      state.message = `Connected to ${response.model}`
-      // watch() handler syncs to singleton + localStorage automatically
+      state.value.status = "success"
+      state.value.message = `Connected to ${response.model}`
     } else {
-      state.status = "error"
-      state.message = response.error || "Connection failed"
-      // watch() handler syncs to singleton + localStorage automatically
+      state.value.status = "error"
+      state.value.message = response.error || "Connection failed"
     }
   } catch (err) {
-    state.status = "error"
-    state.message = err instanceof Error ? err.message : "Connection failed"
-    // watch() handler syncs to singleton + localStorage automatically
+    state.value.status = "error"
+    state.value.message = err instanceof Error ? err.message : "Connection failed"
   } finally {
-    state.testing = false
+    state.value.testing = false
   }
 }
 </script>

@@ -47,10 +47,10 @@ async function handleSend(text: string) {
 
   try {
     const provider: ChatProviderConfig = {
-      baseUrl: providerSettings.baseUrl,
-      model: providerSettings.model,
-      apiKey: providerSettings.apiKey || undefined,
-      timeoutMs: providerSettings.timeout * 1000,
+      baseUrl: providerSettings.value.baseUrl,
+      model: providerSettings.value.model,
+      apiKey: providerSettings.value.apiKey || undefined,
+      timeoutMs: providerSettings.value.timeout * 1000,
     }
 
     const response: ChatResponse = await chat(allMessages, provider)

@@ -8,7 +8,7 @@ import { config } from "./config/env.js";
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
-    bodyLimit: 2_097_152, // 2 MB to allow chat requests up to 1 MB
+    bodyLimit: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
   });
 
   app.register(cors, {

@@ -1,13 +1,6 @@
-import { reactive } from "vue"
+import { ref, type Ref } from "vue"
 
 export const STORAGE_KEY = "local-ai-harness-provider-settings"
-const defaults = {
-  name: "llama.cpp",
-  baseUrl: "http://localhost:8080/v1",
-  model: "local-model",
-  apiKey: "",
-  timeout: 120,
-}
 
 interface ProviderSettings {
   name: string
@@ -17,37 +10,58 @@ interface ProviderSettings {
   timeout: number
 }
 
-let settings: ProviderSettings | null = null
-
-export function getProviderSettings(): ProviderSettings {
-  if (!settings) {
-    settings = reactive({
-      name: defaults.name,
-      baseUrl: defaults.baseUrl,
-      model: defaults.model,
-      apiKey: defaults.apiKey,
-      timeout: defaults.timeout,
-    }) as unknown as ProviderSettings
-
-    // Load from localStorage
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<ProviderSettings>
-        if (parsed.name !== undefined) settings.name = parsed.name
-        if (parsed.baseUrl !== undefined) settings.baseUrl = parsed.baseUrl
-        if (parsed.model !== undefined) settings.model = parsed.model
-        if (parsed.apiKey !== undefined) settings.apiKey = parsed.apiKey
-        if (parsed.timeout !== undefined) settings.timeout = parsed.timeout
-      }
-    } catch {
-      // Ignore corrupt storage
-    }
-  }
-
-  return settings
+const defaults: ProviderSettings = {
+  name: "llama.cpp",
+  baseUrl: "http://localhost:8080/v1",
+  model: "local-model",
+  apiKey: "",
+  timeout: 120,
 }
 
-export function useProviderSettings() {
+function loadFromStorage(): Partial<ProviderSettings> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      return JSON.parse(saved) as Partial<ProviderSettings>
+    }
+  } catch {
+    // Ignore corrupt storage
+  }
+  return {}
+}
+
+function saveToStorage(settings: ProviderSettings): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+}
+
+function mergeWithDefaults(saved: Partial<ProviderSettings>): ProviderSettings {
+  return {
+    name: saved.name ?? defaults.name,
+    baseUrl: saved.baseUrl ?? defaults.baseUrl,
+    model: saved.model ?? defaults.model,
+    apiKey: saved.apiKey ?? defaults.apiKey,
+    timeout: saved.timeout ?? defaults.timeout,
+  }
+}
+
+let settingsRef: Ref<ProviderSettings> | null = null
+
+export function getProviderSettings(): Ref<ProviderSettings> {
+  if (!settingsRef) {
+    const saved = loadFromStorage()
+    settingsRef = ref(mergeWithDefaults(saved)) as Ref<ProviderSettings>
+  }
+  return settingsRef
+}
+
+export function useProviderSettings(): Ref<ProviderSettings> {
   return getProviderSettings()
+}
+
+export function updateProviderSettings(updates: Partial<ProviderSettings>): ProviderSettings {
+  const current = getProviderSettings().value
+  const next = { ...current, ...updates }
+  settingsRef!.value = next
+  saveToStorage(next)
+  return next
 }
