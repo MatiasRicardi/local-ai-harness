@@ -249,7 +249,7 @@ export class OpenAICompatibleClient implements ProviderClient {
     }
   }
 
-/**
+  /**
    * Send a streaming chat completion request.
    * Returns a ProviderStream that can be read for text deltas.
    */

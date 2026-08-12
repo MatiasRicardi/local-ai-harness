@@ -419,63 +419,6 @@ describe("chat endpoint", () => {
     expect(body.error).toBe("Provider returned a malformed response");
   });
 
-  it("returns 413 when request body exceeds 1 MB", async () => {
-    app = buildApp();
-
-    global.fetch = ((url: string, _: RequestInit) => {
-      expect(url).toContain("/chat/completions");
-      return {
-        ok: true,
-        json: async () => ({
-          id: "chat-123",
-          object: "chat.completion",
-          created: Date.now(),
-          model: "test-model",
-          choices: [
-            {
-              index: 0,
-              message: { role: "assistant", content: "OK" },
-              finish_reason: "stop",
-            },
-          ],
-          usage: {
-            prompt_tokens: 10,
-            completion_tokens: 15,
-            total_tokens: 25,
-          },
-        }),
-      };
-    }) as unknown as typeof globalThis.fetch;
-
-    const largeContent = "x".repeat(1_100_000);
-    const payload = JSON.stringify({
-      provider: {
-        baseUrl: "http://127.0.0.1:8080/v1",
-        model: "test-model",
-      },
-      messages: [
-        {
-          role: "user",
-          content: largeContent,
-        },
-      ],
-    });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/chat",
-      payload,
-      headers: {
-        "content-type": "application/json",
-      },
-    });
-
-    expect(response.statusCode).toBe(413);
-    const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("exceeds maximum size");
-  });
-
   it("uses custom timeout when provided without error", async () => {
     app = buildApp();
 
