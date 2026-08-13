@@ -306,7 +306,7 @@ export class OpenAICompatibleClient implements ProviderClient {
           return stream.getReader();
         },
         baseUrl: capturedBaseUrl,
-      } as ProviderStream;
+      };
     } catch (error) {
       const errorInfo = this.getErrorInfo(error);
       throw new Error(errorInfo.message, {

@@ -75,14 +75,15 @@ export interface ProviderError {
 
 /**
  * Stream returned by the provider client.
- * Implementations should use ReadableStream or a similar async iterator.
+ * Returns raw bytes (Uint8Array) from the upstream HTTP response body.
+ * A separate SSE parser is responsible for converting bytes → text deltas.
  */
 export interface ProviderStream {
   /**
-   * Read text chunks from the stream.
-   * Each chunk is a string delta (partial text).
+   * Read raw bytes from the upstream response body.
+   * The caller is responsible for SSE parsing and text decoding.
    */
-  getReader(): ReadableStreamDefaultReader<string>;
+  getReader(): ReadableStreamDefaultReader<Uint8Array>;
 
   /**
    * The base URL of the provider. Useful for error messages.
