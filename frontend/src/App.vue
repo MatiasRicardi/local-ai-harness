@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue"
-import { chat, type ChatMessage, type ChatResponse, type ChatProviderConfig } from "./services/chat"
+import { streamChat, type ChatMessage, type ChatProviderConfig, type StreamCallbacks } from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import ChatMessages from "./components/ChatMessages.vue"
@@ -45,38 +45,57 @@ async function handleSend(text: string) {
 
   sending.value = true
 
-  try {
-    const provider: ChatProviderConfig = {
-      baseUrl: providerSettings.value.baseUrl,
-      model: providerSettings.value.model,
-      apiKey: providerSettings.value.apiKey || undefined,
-      timeoutMs: providerSettings.value.timeout * 1000,
-    }
+  let assistantMessageId: string | null = null
 
-    const response: ChatResponse = await chat(allMessages, provider)
+  const provider: ChatProviderConfig = {
+    baseUrl: providerSettings.value.baseUrl,
+    model: providerSettings.value.model,
+    apiKey: providerSettings.value.apiKey || undefined,
+    timeoutMs: providerSettings.value.timeout * 1000,
+  }
 
-    if (!response.success) {
-      error.value = response.error || "Error al enviar el mensaje."
-      return
-    }
-
-    if (response.message) {
+  const callbacks: StreamCallbacks = {
+    onStart: () => {
+      // Insert empty assistant message when generation starts
+      assistantMessageId = generateId()
       messages.value.push({
-        id: generateId(),
+        id: assistantMessageId,
         role: "assistant",
-        content: response.message.content,
+        content: "",
       })
-    }
+      scrollToBottom()
+    },
+    onDelta: (text: string) => {
+      // Append delta to the current assistant message
+      if (assistantMessageId !== null) {
+        const msg = messages.value.find((m) => m.id === assistantMessageId)
+        if (msg) {
+          msg.content += text
+          scrollToBottom()
+        }
+      }
+    },
+    onDone: () => {
+      assistantMessageId = null
+      loading.value = false
+      sending.value = false
+      scrollToBottom()
+    },
+    onError: (message: string) => {
+      assistantMessageId = null
+      error.value = message
+      loading.value = false
+      sending.value = false
+      scrollToBottom()
+    },
+  }
 
-    if (response.model) {
-      console.log(`Model used: ${response.model}`)
-    }
+  try {
+    await streamChat(allMessages, provider, callbacks)
   } catch (err) {
     error.value = err instanceof Error ? err.message : "Error al enviar el mensaje."
-  } finally {
     loading.value = false
     sending.value = false
-    scrollToBottom()
   }
 }
 </script>

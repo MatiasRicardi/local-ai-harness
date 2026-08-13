@@ -30,6 +30,116 @@ export interface ChatProviderConfig {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
+export interface StreamEvent {
+  type: "start" | "delta" | "done" | "error"
+  data: {
+    model?: string
+    text?: string
+    message?: string
+  }
+}
+
+export interface StreamCallbacks {
+  onStart: (model: string) => void
+  onDelta: (text: string) => void
+  onDone: () => void
+  onError: (message: string) => void
+}
+
+export async function streamChat(
+  messages: ChatMessage[],
+  provider: ChatProviderConfig,
+  callbacks: StreamCallbacks,
+): Promise<void> {
+  const apiUrl = `${API_BASE}/api/chat/stream`
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, provider }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unknown error" }))
+    callbacks.onError(error.error || "Failed to send message")
+    return
+  }
+
+  if (!response.body) {
+    callbacks.onError("Empty response body")
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      // Process complete SSE events from buffer
+      const lines = buffer.split("\n")
+      buffer = lines.pop() || "" // Keep incomplete last line in buffer
+
+      let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed.startsWith("event: ")) {
+          const eventType = trimmed.slice(7).trim() as "start" | "delta" | "done" | "error"
+          currentEvent = { type: eventType, data: "" }
+        } else if (trimmed.startsWith("data: ")) {
+          const data = trimmed.slice(6)
+          if (currentEvent) {
+            currentEvent.data = data
+            // Dispatch the event
+            dispatchEvent(currentEvent, callbacks)
+            currentEvent = null
+          }
+        }
+      }
+    }
+  } catch (err) {
+    callbacks.onError(err instanceof Error ? err.message : "Stream read error")
+  }
+}
+
+function dispatchEvent(
+  event: { type: "start" | "delta" | "done" | "error"; data: string },
+  callbacks: StreamCallbacks,
+): void {
+  try {
+    const parsed = JSON.parse(event.data) as {
+      model?: string
+      text?: string
+      message?: string
+    }
+
+    switch (event.type) {
+      case "start":
+        callbacks.onStart(parsed.model ?? "")
+        break
+      case "delta":
+        if (parsed.text !== undefined) {
+          callbacks.onDelta(parsed.text)
+        }
+        break
+      case "done":
+        callbacks.onDone()
+        break
+      case "error":
+        callbacks.onError(parsed.message ?? "Unknown error")
+        break
+    }
+  } catch {
+    // Malformed JSON — ignore silently
+  }
+}
+
 export async function chat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,

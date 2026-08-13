@@ -3,6 +3,7 @@ import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema } from "../provider/schemas.js";
 import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
+import { config } from "../config/env.js";
 
 /**
  * Chat route handler.
@@ -95,13 +96,24 @@ const chat: FastifyPluginAsync = async (server) => {
     const { provider, messages } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
-    // Set up SSE headers for the response
-    reply.raw.writeHead(200, {
+    // Determine CORS origin from request
+    const requestOrigin = request.headers.origin;
+    const allowedOrigins = config.CORS_ORIGINS;
+    const corsOrigin = allowedOrigins.includes(requestOrigin ?? "") ? requestOrigin : null;
+
+    // Set up SSE headers for the response (including CORS since reply.raw bypasses Fastify's CORS plugin)
+    const headers: Record<string, string> = {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no", // Disable nginx buffering
-    });
+    };
+    if (corsOrigin) {
+      headers["Access-Control-Allow-Origin"] = corsOrigin;
+      headers["Access-Control-Allow-Credentials"] = "true";
+    }
+
+    reply.raw.writeHead(200, headers);
 
     // Create AbortController for client disconnect detection
     const abortController = new AbortController();
