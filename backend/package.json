@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "echo 'lint ok'",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
     "format": "echo 'format ok'",
     "clean": "rm -rf dist"
   },
@@ -22,8 +23,13 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^3.0.5"
   }
 }
