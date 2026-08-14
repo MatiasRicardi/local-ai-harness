@@ -54,6 +54,12 @@ export function getProviderSettings(): Ref<ProviderSettings> {
   return settingsRef
 }
 
+function setSettingsRef(value: ProviderSettings): void {
+  if (settingsRef) {
+    settingsRef.value = value
+  }
+}
+
 export function useProviderSettings(): Ref<ProviderSettings> {
   return getProviderSettings()
 }
@@ -61,7 +67,7 @@ export function useProviderSettings(): Ref<ProviderSettings> {
 export function updateProviderSettings(updates: Partial<ProviderSettings>): ProviderSettings {
   const current = getProviderSettings().value
   const next = { ...current, ...updates }
-  settingsRef!.value = next
+  setSettingsRef(next)
   saveToStorage(next)
   return next
 }
