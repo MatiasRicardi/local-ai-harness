@@ -8,16 +8,24 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc -b --noEmit",
-    "type-check": "pnpm run typecheck"
+    "type-check": "pnpm run typecheck",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
   },
   "dependencies": {
     "vue": "^3.5.39"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/tsconfig": "^0.9.1",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.10.0",
     "typescript": "~6.0.2",
+    "typescript-eslint": "^8.67.0",
     "vite": "^8.1.1",
     "vue-tsc": "^3.3.5"
   }
