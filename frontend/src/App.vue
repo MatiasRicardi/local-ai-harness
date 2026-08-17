@@ -15,8 +15,8 @@ const messagesEnd = ref<HTMLElement>()
 
 const providerSettings = useProviderSettings()
 
-function scrollToBottom() {
-  messagesEnd.value?.scrollIntoView({ behavior: "smooth" })
+function scrollToBottom(behavior: ScrollBehavior = "auto") {
+  messagesEnd.value?.scrollIntoView({ behavior })
 }
 
 function generateId(): string {
@@ -41,7 +41,7 @@ async function handleSend(text: string) {
   })
   loading.value = true
   error.value = null
-  scrollToBottom()
+  scrollToBottom("auto")
 
   sending.value = true
 
@@ -63,7 +63,7 @@ async function handleSend(text: string) {
         role: "assistant",
         content: "",
       })
-      scrollToBottom()
+      scrollToBottom("auto")
     },
     onDelta: (text: string) => {
       // Append delta to the current assistant message
@@ -71,7 +71,7 @@ async function handleSend(text: string) {
         const msg = messages.value.find((m) => m.id === assistantMessageId)
         if (msg) {
           msg.content += text
-          scrollToBottom()
+          scrollToBottom("auto")
         }
       }
     },
@@ -79,14 +79,14 @@ async function handleSend(text: string) {
       assistantMessageId = null
       loading.value = false
       sending.value = false
-      scrollToBottom()
+      scrollToBottom("smooth")
     },
     onError: (message: string) => {
       assistantMessageId = null
       error.value = message
       loading.value = false
       sending.value = false
-      scrollToBottom()
+      scrollToBottom("auto")
     },
   }
 
