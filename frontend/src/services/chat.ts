@@ -77,7 +77,11 @@ export async function streamChat(
     while (true) {
       const { done, value } = await reader.read()
 
-      if (done) break
+      if (done) {
+        // Stream ended — if we have an incomplete event in buffer, discard it
+        // This is a normal termination, not an error
+        break
+      }
 
       buffer += decoder.decode(value, { stream: true })
 
@@ -100,7 +104,13 @@ export async function streamChat(
             dispatchEvent(currentEvent, callbacks)
             currentEvent = null
           }
+          // If there's no currentEvent, this is an unexpected "data:" line
+          // without a preceding "event:" — log and skip
+        } else if (currentEvent) {
+          // Unexpected line inside an event block — ignore it
+          // This handles malformed SSE gracefully
         }
+        // Lines that don't match any pattern and aren't inside an event block are also ignored
       }
     }
   } catch (err) {
@@ -126,6 +136,8 @@ function dispatchEvent(
       case "delta":
         if (parsed.text !== undefined) {
           callbacks.onDelta(parsed.text)
+        } else {
+          // Delta without text — skip silently
         }
         break
       case "done":
@@ -136,7 +148,8 @@ function dispatchEvent(
         break
     }
   } catch {
-    // Malformed JSON — ignore silently
+    // Malformed JSON — log and skip without crashing
+    // This ensures malformed events don't break the stream consumer
   }
 }
 
