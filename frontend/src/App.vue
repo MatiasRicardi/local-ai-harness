@@ -17,8 +17,8 @@ const abortController = ref<AbortController | null>(null)
 
 const providerSettings = useProviderSettings()
 
-function scrollToBottom() {
-  messagesEnd.value?.scrollIntoView({ behavior: "smooth" })
+function scrollToBottom(behavior: ScrollBehavior = "auto") {
+  messagesEnd.value?.scrollIntoView({ behavior })
 }
 
 function cleanup() {
@@ -64,7 +64,7 @@ async function handleSend(text: string) {
   })
   loading.value = true
   error.value = null
-  scrollToBottom()
+  scrollToBottom("auto")
 
   abortController.value = new AbortController()
 
@@ -88,7 +88,7 @@ async function handleSend(text: string) {
         role: "assistant",
         content: "",
       })
-      scrollToBottom()
+      scrollToBottom("auto")
     },
     onDelta: (text: string) => {
       // Append delta to the current assistant message
@@ -96,25 +96,22 @@ async function handleSend(text: string) {
         const msg = messages.value.find((m) => m.id === assistantMessageId)
         if (msg) {
           msg.content += text
-          scrollToBottom()
+          scrollToBottom("auto")
         }
       }
     },
     onDone: () => {
       assistantMessageId = null
-      cleanup()
-      scrollToBottom()
-    },
-    onStopped: () => {
-      assistantMessageId = null
-      cleanup()
-      scrollToBottom()
+      loading.value = false
+      sending.value = false
+      scrollToBottom("smooth")
     },
     onError: (message: string) => {
       assistantMessageId = null
       error.value = message
-      cleanup()
-      scrollToBottom()
+      loading.value = false
+      sending.value = false
+      scrollToBottom("auto")
     },
   }
 
