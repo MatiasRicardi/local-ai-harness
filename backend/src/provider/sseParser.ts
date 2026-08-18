@@ -47,6 +47,12 @@ export interface SseParserOptions {
    * Defaults to a no-op. Set to a logger for debugging.
    */
   onWarning?: (message: string) => void;
+
+  /**
+   * Optional abort signal to cancel parsing.
+   * When aborted, the parser yields an error event and stops.
+   */
+  signal?: AbortSignal;
 }
 
 // ── Parser class ─────────────────────────────────────────────────────────────
@@ -72,6 +78,7 @@ export class SseParser {
   constructor(options: SseParserOptions = {}) {
     this.options = {
       onWarning: options.onWarning ?? (() => {}),
+      signal: options.signal ?? ({} as AbortSignal),
     };
   }
 
@@ -82,11 +89,21 @@ export class SseParser {
    *   - `[DONE]` is received → yields `SseDone` then closes
    *   - EOF is reached → yields `SseError` (unless `[DONE]` was already seen)
    *   - An unrecoverable parse error occurs → yields `SseError`
+   *   - Abort signal is triggered → yields `SseError` and stops
    */
   async *parse(
     reader: ReadableStreamDefaultReader<Uint8Array>,
   ): AsyncGenerator<SseEvent, void, undefined> {
     while (true) {
+      // Check abort signal before each read
+      if (this.options.signal?.aborted) {
+        yield {
+          type: "error",
+          message: "Stream aborted",
+        };
+        return;
+      }
+
       const { value, done } = await reader.read();
 
       if (done) {

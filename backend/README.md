@@ -6,7 +6,7 @@ Fastify backend for Local AI Harness.
 
 ## 🧠 Purpose
 
-This backend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 9B**.
+This backend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 35B**.
 
 ### ⚠️ Warning
 
@@ -54,6 +54,12 @@ pnpm typecheck
 
 ```bash
 pnpm test
+```
+
+## lint
+
+```bash
+pnpm lint
 ```
 
 ## Environment Variables

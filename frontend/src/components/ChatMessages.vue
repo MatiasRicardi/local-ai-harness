@@ -5,6 +5,7 @@ interface Props {
   messages: Message[]
   loading: boolean
   error: string | null
+  stopped: boolean
 }
 
 defineProps<Props>()
@@ -16,15 +17,22 @@ defineProps<Props>()
       <p>{{ error }}</p>
     </div>
 
-    <div v-for="msg in messages" :key="msg.id" class="message" :class="'message-' + msg.role">
+    <div v-for="msg in messages" :key="msg.id" class="message" :class="['message-' + msg.role, { 'message-stopped': msg.stopped }]">
       <div class="message-content">
         <div class="message-role">{{ msg.role }}</div>
         <div class="message-text">{{ msg.content }}</div>
+        <div v-if="msg.stopped" class="message-stopped-indicator">
+          <span>Detenido</span>
+        </div>
       </div>
     </div>
 
     <div v-if="loading" class="loading">
       <span>Generando...</span>
+    </div>
+
+    <div v-if="stopped" class="stopped">
+      <span>Generación detenida</span>
     </div>
   </div>
 </template>
@@ -40,6 +48,13 @@ defineProps<Props>()
   font-style: italic;
   color: var(--text);
   opacity: 0.7;
+  padding: 8px 0;
+}
+
+.stopped {
+  font-style: italic;
+  color: #ef4444;
+  opacity: 0.8;
   padding: 8px 0;
 }
 
@@ -89,5 +104,18 @@ defineProps<Props>()
 
 .message-assistant {
   background: var(--code-bg);
+}
+
+.message-stopped {
+  opacity: 0.7;
+}
+
+.message-stopped-indicator {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: #ef4444;
+  font-style: italic;
 }
 </style>

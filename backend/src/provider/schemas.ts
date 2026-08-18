@@ -40,13 +40,14 @@ export type ProviderConfig = z.infer<typeof providerConfigSchema>;
  * Zod schema for a single chat message.
  */
 export const chatMessageSchema = z.object({
+  id: z.string().optional(),
   role: z.enum(["system", "user", "assistant"]),
   content: z
     .string()
-    .min(1, "Message content must not be empty")
     .refine((val) => val.trim().length > 0, {
       message: "Message content must not be empty or only whitespace",
     }),
+  stopped: z.boolean().optional(),
 });
 
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
