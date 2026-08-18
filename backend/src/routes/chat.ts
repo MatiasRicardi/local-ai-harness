@@ -3,7 +3,20 @@ import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema } from "../provider/schemas.js";
 import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
-import { config } from "../config/env.js";
+
+/**
+ * Minimal HTML/JSON sanitizer for untrusted SSE data from providers.
+ * Escapes characters that could break the SSE wire format or inject HTML.
+ */
+function sanitizeSseData(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;")
+    .replace(/\u0000/g, "")
+}
 
 /**
  * Chat route handler.
@@ -70,6 +83,9 @@ const chat: FastifyPluginAsync = async (server) => {
    * Forwards messages through ProviderClient and streams the response
    * to the frontend as Server-Sent Events (SSE).
    *
+   * Uses @fastify/sse for proper backpressure handling, lifecycle
+   * integration, and wire-format correctness.
+   *
    * Protocol:
    *   event: start
    *   data: {"model":"llama3"}
@@ -83,7 +99,7 @@ const chat: FastifyPluginAsync = async (server) => {
    *   event: error
    *   data: {"message":"Provider connection failed"}
    */
-  server.post("/api/chat/stream", async (request, reply) => {
+  server.post("/api/chat/stream", { sse: "manual" }, async (request, reply) => {
     // Validate request payload using Zod schema
     const result = chatRequestSchema.safeParse(request.body);
     if (!result.success) {
@@ -96,38 +112,22 @@ const chat: FastifyPluginAsync = async (server) => {
     const { provider, messages } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
-    // Determine CORS origin from request
-    const requestOrigin = request.headers.origin;
-    const allowedOrigins = config.CORS_ORIGINS;
-    const corsOrigin = allowedOrigins.includes(requestOrigin ?? "") ? requestOrigin : null;
-
-    // Set up SSE headers for the response (including CORS since reply.raw bypasses Fastify's CORS plugin)
-    const headers: Record<string, string> = {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no", // Disable nginx buffering
-    };
-    if (corsOrigin) {
-      headers["Access-Control-Allow-Origin"] = corsOrigin;
-      headers["Access-Control-Allow-Credentials"] = "true";
-    }
-
-    reply.raw.writeHead(200, headers);
-
     // Create AbortController for client disconnect detection
     const abortController = new AbortController();
 
     // Detect client disconnect and abort upstream
-    reply.raw.on("close", () => {
+    reply.sse.onClose(() => {
       abortController.abort();
     });
 
     // Write start event
-    reply.raw.write(`event: start\ndata: ${JSON.stringify({ model: provider.model })}\n\n`);
+    await reply.sse.send({
+      event: "start",
+      data: { model: provider.model },
+    });
 
     try {
-      // Get the streaming response from the provider
+      // Get the streaming response from the provider (passing abort signal for end-to-end cancellation)
       const stream = await client.chatStream(
         {
           baseUrl: provider.baseUrl,
@@ -136,13 +136,14 @@ const chat: FastifyPluginAsync = async (server) => {
           timeoutMs: provider.timeoutMs,
         },
         messages,
+        { signal: abortController.signal },
       );
 
       // Get the reader from the stream
       const reader = stream.getReader();
 
-      // Create SSE parser
-      const parser = new SseParser();
+      // Create SSE parser with abort signal
+      const parser = new SseParser({ signal: abortController.signal });
 
       // Stream events from the parser to the response
       for await (const event of parser.parse(reader)) {
@@ -153,19 +154,25 @@ const chat: FastifyPluginAsync = async (server) => {
 
         switch (event.type) {
           case "delta":
-            reply.raw.write(`event: delta\ndata: ${JSON.stringify({ text: event.text })}\n\n`);
+            await reply.sse.send({
+              event: "delta",
+              data: { text: sanitizeSseData(event.text) },
+            });
             break;
           case "done":
-            reply.raw.write(`event: done\ndata: {}\n\n`);
+            await reply.sse.send({
+              event: "done",
+              data: {},
+            });
             break;
           case "error":
-            reply.raw.write(`event: error\ndata: ${JSON.stringify({ message: event.message })}\n\n`);
+            await reply.sse.send({
+              event: "error",
+              data: { message: event.message },
+            });
             break;
         }
       }
-
-      // Close the response
-      reply.raw.end();
     } catch (error) {
       // If client disconnected, don't send error
       if (abortController.signal.aborted) {
@@ -175,8 +182,10 @@ const chat: FastifyPluginAsync = async (server) => {
       // Write error event
       const errorInfo = client.getErrorInfo(error);
       const { body: errorBody } = mapErrorToReply(errorInfo);
-      reply.raw.write(`event: error\ndata: ${JSON.stringify({ message: errorBody.error })}\n\n`);
-      reply.raw.end();
+      await reply.sse.send({
+        event: "error",
+        data: { message: errorBody.error },
+      });
     }
   });
 };

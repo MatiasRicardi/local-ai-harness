@@ -8,6 +8,10 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+
+const emit = defineEmits<{
+  stop: []
+}>()
 const text = ref("")
 
 function handleSend() {
@@ -38,12 +42,21 @@ function handleEnter(event: KeyboardEvent) {
       class="chat-input-textarea"
     />
     <button
+      v-if="!sending"
       type="button"
-      class="chat-input-send"
+      class="chat-input-btn chat-input-send"
       :disabled="sending"
       @click="handleSend"
     >
       Send
+    </button>
+    <button
+      v-else
+      type="button"
+      class="chat-input-btn chat-input-stop"
+      @click="emit('stop')"
+    >
+      Stop
     </button>
   </div>
 </template>
@@ -74,10 +87,8 @@ function handleEnter(event: KeyboardEvent) {
   border-color: var(--accent);
 }
 
-.chat-input-send {
+.chat-input-btn {
   padding: 10px 20px;
-  background: var(--accent);
-  color: var(--bg);
   border: none;
   border-radius: 8px;
   font-family: inherit;
@@ -87,12 +98,22 @@ function handleEnter(event: KeyboardEvent) {
   transition: opacity 0.2s;
 }
 
-.chat-input-send:hover {
+.chat-input-btn:hover {
   opacity: 0.85;
 }
 
-.chat-input-send:disabled {
+.chat-input-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.chat-input-send {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.chat-input-stop {
+  background: #ef4444;
+  color: white;
 }
 </style>

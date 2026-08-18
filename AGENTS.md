@@ -55,6 +55,7 @@ pnpm build
 pnpm start
 pnpm test
 pnpm typecheck
+pnpm lint
 ```
 
 ### Frontend
@@ -72,6 +73,7 @@ pnpm dev
 pnpm build
 pnpm preview
 pnpm type-check
+pnpm lint
 ```
 
 From the repository root, use `pnpm dev` to start both services when supported by the root scripts.

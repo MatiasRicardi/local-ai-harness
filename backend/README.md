@@ -56,6 +56,12 @@ pnpm typecheck
 pnpm test
 ```
 
+## lint
+
+```bash
+pnpm lint
+```
+
 ## Environment Variables
 
 | Variable | Description | Default |

@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import sse from "@fastify/sse";
 import health from "./routes/health.js";
 import providerTest from "./routes/provider.js";
 import chat from "./routes/chat.js";
@@ -17,6 +18,8 @@ export function buildApp(): FastifyInstance {
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   });
+
+  app.register(sse);
 
   app.register(health);
   app.register(providerTest);

@@ -11,12 +11,33 @@ const messages = ref<Message[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const sending = ref(false)
+const stopped = ref(false)
 const messagesEnd = ref<HTMLElement>()
+const abortController = ref<AbortController | null>(null)
 
 const providerSettings = useProviderSettings()
 
 function scrollToBottom() {
   messagesEnd.value?.scrollIntoView({ behavior: "smooth" })
+}
+
+function cleanup() {
+  abortController.value = null
+  sending.value = false
+  loading.value = false
+  stopped.value = false
+}
+
+function handleStop() {
+  if (!abortController.value || !loading.value) return
+  abortController.value.abort()
+  stopped.value = true
+
+  // Mark the last assistant message as stopped
+  const lastMsg = messages.value[messages.value.length - 1]
+  if (lastMsg && lastMsg.role === "assistant") {
+    lastMsg.stopped = true
+  }
 }
 
 function generateId(): string {
@@ -32,7 +53,9 @@ async function handleSend(text: string) {
     content: text.trim(),
   }
 
-  const allMessages = [...messages.value, userMessage]
+  const allMessages = [...messages.value, userMessage].filter(
+    (m) => m.content.trim().length > 0,
+  )
 
   messages.value.push({
     id: generateId(),
@@ -42,6 +65,8 @@ async function handleSend(text: string) {
   loading.value = true
   error.value = null
   scrollToBottom()
+
+  abortController.value = new AbortController()
 
   sending.value = true
 
@@ -77,25 +102,35 @@ async function handleSend(text: string) {
     },
     onDone: () => {
       assistantMessageId = null
-      loading.value = false
-      sending.value = false
+      cleanup()
+      scrollToBottom()
+    },
+    onStopped: () => {
+      assistantMessageId = null
+      cleanup()
       scrollToBottom()
     },
     onError: (message: string) => {
       assistantMessageId = null
       error.value = message
-      loading.value = false
-      sending.value = false
+      cleanup()
       scrollToBottom()
     },
   }
 
   try {
-    await streamChat(allMessages, provider, callbacks)
+    const signal = abortController.value?.signal
+    await streamChat(allMessages, provider, callbacks, { signal })
   } catch (err) {
+    // Silently handle user cancellation (onStopped already handles cleanup)
+    if (err instanceof DOMException && err.name === "AbortError") {
+      if (!stopped.value) {
+        cleanup()
+      }
+      return
+    }
     error.value = err instanceof Error ? err.message : "Error al enviar el mensaje."
-    loading.value = false
-    sending.value = false
+    cleanup()
   }
 }
 </script>
@@ -108,9 +143,14 @@ async function handleSend(text: string) {
     <main class="main">
       <ProviderSettings />
       <section class="chat-panel">
-        <ChatMessages :messages="messages" :loading="loading" :error="error" />
+        <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
         <div ref="messagesEnd" />
-        <ChatInput :on-send="handleSend" :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'" :sending="sending" />
+        <ChatInput
+          :on-send="handleSend"
+          :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'"
+          :sending="sending"
+          @stop="handleStop"
+        />
       </section>
     </main>
   </div>

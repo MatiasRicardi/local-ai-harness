@@ -43,6 +43,7 @@ export interface StreamCallbacks {
   onStart: (model: string) => void
   onDelta: (text: string) => void
   onDone: () => void
+  onStopped: () => void
   onError: (message: string) => void
 }
 
@@ -50,12 +51,14 @@ export async function streamChat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,
   callbacks: StreamCallbacks,
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
   const response = await fetch(apiUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages, provider }),
+    signal: options?.signal,
   })
 
   if (!response.ok) {
@@ -104,7 +107,16 @@ export async function streamChat(
       }
     }
   } catch (err) {
+    if (options?.signal?.aborted || err instanceof DOMException && err.name === "AbortError") {
+      // Clean up buffer on abort
+      buffer = ""
+      callbacks.onStopped()
+      return
+    }
+
     callbacks.onError(err instanceof Error ? err.message : "Stream read error")
+  } finally {
+    reader.releaseLock()
   }
 }
 

@@ -50,3 +50,9 @@ pnpm build
 ```
 
 Build output is in `dist/`.
+
+## lint
+
+```bash
+pnpm lint
+```

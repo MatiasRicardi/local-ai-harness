@@ -2,6 +2,27 @@ import type { ProviderClient, ChatResponse, ProviderStream, ProviderError } from
 import { type ProviderConfig, type ChatMessages, type ChatMessage } from "./schemas.js";
 
 /**
+ * Combine two AbortSignals so that aborting either one aborts the combined signal.
+ * Falls back to a simple implementation when AbortSignal.any() is unavailable.
+ */
+function combineSignals(...signals: AbortSignal[]): AbortSignal {
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(signals);
+  }
+
+  // Fallback: create a new AbortController that aborts if any input signal aborts
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+/**
  * Normalizes a base URL by ensuring it ends with /v1 and stripping trailing slashes.
  * Preserves any custom path prefix after /v1.
  *
@@ -256,6 +277,7 @@ export class OpenAICompatibleClient implements ProviderClient {
   async chatStream(
     config: ProviderConfig,
     messages: ChatMessages,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderStream> {
     const capturedBaseUrl = this.baseUrl;
 
@@ -276,11 +298,16 @@ export class OpenAICompatibleClient implements ProviderClient {
         stream: true,
       });
 
+      const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
+      const combinedSignal = options?.signal
+        ? combineSignals(options.signal, timeoutSignal)
+        : timeoutSignal;
+
       const response = await fetch(url, {
         method: "POST",
         headers,
         body,
-        signal: AbortSignal.timeout(config.timeoutMs),
+        signal: combinedSignal,
       });
 
       if (!response.ok) {
