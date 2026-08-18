@@ -104,15 +104,18 @@ async function handleSend(text: string) {
     },
     onDone: () => {
       assistantMessageId = null
-      loading.value = false
-      sending.value = false
+      cleanup()
       scrollToBottom("smooth")
+    },
+    onStopped: () => {
+      assistantMessageId = null
+      cleanup()
+      scrollToBottom("auto")
     },
     onError: (message: string) => {
       assistantMessageId = null
       error.value = message
-      loading.value = false
-      sending.value = false
+      cleanup()
       scrollToBottom("auto")
     },
   }

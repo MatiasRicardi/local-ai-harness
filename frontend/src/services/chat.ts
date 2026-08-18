@@ -83,8 +83,13 @@ export async function streamChat(
       const { done, value } = await reader.read()
 
       if (done) {
-        // Stream ended — if we have an incomplete event in buffer, discard it
-        // This is a normal termination, not an error
+        // If the stream was aborted, treat it as stopped
+        if (options?.signal?.aborted) {
+          callbacks.onStopped()
+        } else {
+          // Normal EOF without [DONE] — treat as done
+          callbacks.onDone()
+        }
         break
       }
 
