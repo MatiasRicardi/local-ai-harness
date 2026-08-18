@@ -93,11 +93,10 @@ export class SseParser {
    */
   async *parse(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    options?: { signal?: AbortSignal },
   ): AsyncGenerator<SseEvent, void, undefined> {
     while (true) {
       // Check abort signal before each read
-      if (options?.signal?.aborted) {
+      if (this.options.signal?.aborted) {
         yield {
           type: "error",
           message: "Stream aborted",

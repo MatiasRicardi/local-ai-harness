@@ -5,17 +5,13 @@ import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
 
 /**
- * Minimal HTML/JSON sanitizer for untrusted SSE data from providers.
- * Escapes characters that could break the SSE wire format or inject HTML.
+ * Sanitize untrusted SSE data from providers.
+ * Removes null characters which could cause issues in downstream processing.
+ * No HTML escaping needed — SSE wire format does not require it,
+ * and Vue renders content via {{ }} interpolation which escapes HTML automatically.
  */
 function sanitizeSseData(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#x27;")
-    .replace(/\u0000/g, "")
+  return text.replace(/\u0000/g, "")
 }
 
 /**
@@ -114,10 +110,15 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // Create AbortController for client disconnect detection
     const abortController = new AbortController();
+    const cleanupController = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     // Detect client disconnect and abort upstream
     reply.sse.onClose(() => {
-      abortController.abort();
+      cleanupController.abort();
+      if (reader) {
+        void reader.cancel();
+      }
     });
 
     // Write start event
@@ -140,15 +141,15 @@ const chat: FastifyPluginAsync = async (server) => {
       );
 
       // Get the reader from the stream
-      const reader = stream.getReader();
+      reader = stream.getReader();
 
-      // Create SSE parser with abort signal
-      const parser = new SseParser({ signal: abortController.signal });
+      // Create SSE parser with cleanup signal
+      const parser = new SseParser({ signal: cleanupController.signal });
 
       // Stream events from the parser to the response
       for await (const event of parser.parse(reader)) {
         // If client disconnected, stop streaming
-        if (abortController.signal.aborted) {
+        if (cleanupController.signal.aborted) {
           break;
         }
 
@@ -175,7 +176,7 @@ const chat: FastifyPluginAsync = async (server) => {
       }
     } catch (error) {
       // If client disconnected, don't send error
-      if (abortController.signal.aborted) {
+      if (cleanupController.signal.aborted) {
         return;
       }
 

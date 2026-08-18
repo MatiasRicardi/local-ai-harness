@@ -6,7 +6,7 @@ Vue 3 + TypeScript + Vite frontend for the Local AI Harness application.
 
 ## 🧠 Purpose
 
-This frontend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 9B**.
+This frontend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 35B**.
 
 ### ⚠️ Warning
 

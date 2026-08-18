@@ -54,29 +54,31 @@ export async function streamChat(
   options?: { signal?: AbortSignal },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, provider }),
-    signal: options?.signal,
-  })
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }))
-    callbacks.onError(error.error || "Failed to send message")
-    return
-  }
-
-  if (!response.body) {
-    callbacks.onError("Empty response body")
-    return
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let buffer = ""
 
   try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, provider }),
+      signal: options?.signal,
+    })
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unknown error" }))
+      callbacks.onError(error.error || "Failed to send message")
+      return
+    }
+
+    if (!response.body) {
+      callbacks.onError("Empty response body")
+      return
+    }
+
+    reader = response.body.getReader()
+    const decoder = new TextDecoder()
     while (true) {
       const { done, value } = await reader.read()
 
@@ -126,7 +128,7 @@ export async function streamChat(
 
     callbacks.onError(err instanceof Error ? err.message : "Stream read error")
   } finally {
-    reader.releaseLock()
+    reader?.releaseLock()
   }
 }
 

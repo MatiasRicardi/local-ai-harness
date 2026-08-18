@@ -44,11 +44,7 @@ export const chatMessageSchema = z.object({
   role: z.enum(["system", "user", "assistant"]),
   content: z
     .string()
-    .optional()
-    .refine((val) => {
-      if (val === undefined) return true
-      return val.trim().length > 0
-    }, {
+    .refine((val) => val.trim().length > 0, {
       message: "Message content must not be empty or only whitespace",
     }),
   stopped: z.boolean().optional(),

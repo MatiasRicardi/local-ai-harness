@@ -53,6 +53,8 @@ async function handleSend(text: string) {
     content: text.trim(),
   }
 
+  stopped.value = false
+
   const allMessages = [...messages.value, userMessage].filter(
     (m) => m.content.trim().length > 0,
   )
@@ -119,11 +121,9 @@ async function handleSend(text: string) {
     const signal = abortController.value?.signal
     await streamChat(allMessages, provider, callbacks, { signal })
   } catch (err) {
-    // Silently handle user cancellation (onStopped already handles cleanup)
+    // AbortError: onStopped or cleanup already handles state reset
     if (err instanceof DOMException && err.name === "AbortError") {
-      if (!stopped.value) {
-        cleanup()
-      }
+      cleanup()
       return
     }
     error.value = err instanceof Error ? err.message : "Error al enviar el mensaje."
