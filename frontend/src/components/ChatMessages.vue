@@ -160,6 +160,7 @@ function renderAssistantContent(content: string): string {
 
 /* Markdown typography for assistant messages */
 .markdown-content {
+  white-space: normal;
   line-height: 1.6;
   font-size: 0.95rem;
 }

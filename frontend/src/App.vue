@@ -188,7 +188,7 @@ async function handleSend(text: string) {
   padding: 24px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
-  overflow-y: hidden;
+  overflow-y: auto;
 }
 
 .chat-panel {
