@@ -129,7 +129,7 @@ async function handleSend(text: string) {
       cleanup()
       return
     }
-    error.value = err instanceof Error ? err.message : "Error al enviar el mensaje."
+    error.value = err instanceof Error ? err.message : "Error sending message."
     cleanup()
   }
 }
@@ -143,14 +143,16 @@ async function handleSend(text: string) {
     <main class="main">
       <ProviderSettings />
       <section class="chat-panel">
-        <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
-        <div ref="messagesEnd" />
-        <ChatInput
-          :on-send="handleSend"
-          :text-placeholder="'Escribe tu mensaje... (Enter para enviar)'"
-          :sending="sending"
-          @stop="handleStop"
-        />
+        <div class="chat-inner">
+          <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
+          <div ref="messagesEnd" />
+          <ChatInput
+            :on-send="handleSend"
+            :text-placeholder="'Type your message... (Enter to send)'"
+            :sending="sending"
+            @stop="handleStop"
+          />
+        </div>
       </section>
     </main>
   </div>
@@ -181,21 +183,30 @@ async function handleSend(text: string) {
   overflow: hidden;
 }
 
-.connection-panel,
-.chat-panel {
+.connection-panel {
   flex: 1;
   padding: 24px;
-  overflow-y: auto;
-}
-
-.connection-panel {
-  border-right: 1px solid var(--border);
   background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  overflow-y: hidden;
 }
 
 .chat-panel {
+  flex: 1;
   background: var(--bg);
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+}
+
+.chat-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 16px;
+  gap: 16px;
 }
 </style>

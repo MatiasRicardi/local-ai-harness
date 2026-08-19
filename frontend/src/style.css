@@ -71,22 +71,6 @@ body {
   overflow: hidden;
 }
 
-.connection-panel,
-.chat-panel {
-  flex: 1;
-  padding: 24px;
-  overflow-y: auto;
-}
-
-.connection-panel {
-  border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
-}
-
-.chat-panel {
-  background: var(--bg);
-}
-
 p {
   margin: 0;
 }
@@ -105,5 +89,13 @@ p {
 
   .chat-panel {
     max-height: 50vh;
+  }
+
+  .chat-inner {
+    padding: 0 12px;
+  }
+
+  .chat-messages {
+    padding: 0 8px;
   }
 }

@@ -64,20 +64,24 @@ function handleEnter(event: KeyboardEvent) {
 <style scoped>
 .chat-input {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   margin-top: auto;
+  padding-top: 12px;
+  align-items: flex-end;
 }
 
 .chat-input-textarea {
   flex: 1;
-  padding: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
   resize: vertical;
-  min-height: 60px;
+  min-height: 56px;
   max-height: 200px;
   outline: none;
   transition: border-color 0.2s;
@@ -85,17 +89,25 @@ function handleEnter(event: KeyboardEvent) {
 
 .chat-input-textarea:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.15);
+}
+
+.chat-input-textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .chat-input-btn {
-  padding: 10px 20px;
+  padding: 12px 22px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   font-family: inherit;
   font-size: 0.9rem;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
   transition: opacity 0.2s;
+  flex-shrink: 0;
 }
 
 .chat-input-btn:hover {
