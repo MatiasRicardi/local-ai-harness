@@ -9,9 +9,9 @@ import files from "./routes/files.js";
 import { config } from "./config/env.js";
 
 
-export function buildApp(_options?: { uploadDir?: string }): FastifyInstance {
+export function buildApp(): FastifyInstance {
   const app = Fastify({
-    bodyLimit: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
+    bodyLimit: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1024 * 1024, // +1MB overhead for multipart headers
   });
 
   app.register(cors, {

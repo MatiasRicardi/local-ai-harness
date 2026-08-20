@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach, beforeAll } from "vitest";
+import { describe, it, expect, afterEach, afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import { overrideConfig } from "../config/env.js";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import os from "node:os";
 
@@ -54,6 +54,11 @@ describe("file upload endpoint", () => {
     } catch {
       // ignore
     }
+  });
+
+  afterAll(async () => {
+    // Restore original config.UPLOAD_DIR
+    overrideConfig({ UPLOAD_DIR: originalUploadDir } as any);
   });
 
   it("uploads a .txt file successfully", async () => {
@@ -236,6 +241,10 @@ describe("file upload endpoint", () => {
     const json = JSON.parse(response.body);
     expect(json.success).toBe(false);
     expect(json.error).toContain("maximum allowed size");
+
+    // Verify no partial files remain in the upload directory
+    const filesAfter = await readdir(testUploadDir);
+    expect(filesAfter).toHaveLength(0);
 
     await testApp.close();
   });

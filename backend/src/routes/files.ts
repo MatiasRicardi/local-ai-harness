@@ -5,6 +5,7 @@ import { mkdir, stat, unlink } from "node:fs/promises";
 import { extname } from "node:path";
 import { join } from "node:path";
 import type { FastifyPluginAsync } from "fastify";
+import { consola } from "consola";
 import { config } from "../config/env.js";
 
 const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".pdf"]);
@@ -125,8 +126,28 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           size,
           type: mimeType,
         });
-      } catch {
-        // Handle other errors gracefully
+      } catch (err) {
+        // Handle multipart-specific errors with appropriate status codes
+        const errorName = (err as Error).name;
+        
+        if (errorName === "RequestFileTooLargeError" || errorName === "FilesLimitError" || errorName === "PartsLimitError" || errorName === "FieldsLimitError") {
+          return reply.code(413).send({
+            success: false,
+            error: "Upload exceeds size or count limits.",
+          });
+        }
+        
+        if (errorName === "PrematureCloseError" || errorName === "InvalidMultipartContentTypeError") {
+          return reply.code(400).send({
+            success: false,
+            error: "Invalid upload request.",
+          });
+        }
+        
+        // For unexpected errors, log only stable operation name and safe error code
+        // Never expose raw errors, request data, or file contents
+        consola.error("[upload] unexpected error: upload_failed");
+        
         return reply.code(500).send({
           success: false,
           error: "Failed to process upload.",
