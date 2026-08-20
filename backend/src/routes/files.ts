@@ -52,6 +52,8 @@ const filesRoute: FastifyPluginAsync = async (server) => {
 
       // Validate extension
       if (!isExtensionAllowed(originalFilename)) {
+        // Drain the stream to allow busboy to complete parsing
+        file.file.resume();
         return reply.code(400).send({
           success: false,
           error: `File extension "${extname(originalFilename)}" is not supported. Allowed: .txt, .md, .pdf`,
@@ -61,6 +63,8 @@ const filesRoute: FastifyPluginAsync = async (server) => {
       // Validate MIME type
       const ext = extname(originalFilename).toLowerCase();
       if (!isMimeAllowed(originalFilename, mimeType)) {
+        // Drain the stream to allow busboy to complete parsing
+        file.file.resume();
         return reply.code(400).send({
           success: false,
           error: `MIME type "${mimeType}" is not allowed for ${ext} files.`,
@@ -77,7 +81,17 @@ const filesRoute: FastifyPluginAsync = async (server) => {
       const destinationPath = join(config.UPLOAD_DIR, internalFilename);
 
       // Stream directly to disk
-      await pipeline(file.file, createWriteStream(destinationPath));
+      try {
+        await pipeline(file.file, createWriteStream(destinationPath));
+      } catch (err) {
+        // Clean up partial file on failure
+        try {
+          await unlink(destinationPath);
+        } catch {
+          // Ignore cleanup errors
+        }
+        throw err;
+      }
 
       // Check if the file was truncated by busboy (exceeded size limit)
       if (file.file.truncated) {

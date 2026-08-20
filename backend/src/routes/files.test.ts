@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
+import { overrideConfig } from "../config/env.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -25,18 +26,27 @@ function buildMultipartBody(filename: string, mimeType: string, content: string 
 }
 
 describe("file upload endpoint", () => {
-  let app: ReturnType<typeof buildApp>;
+  let app: ReturnType<typeof buildApp> | undefined;
   let testUploadDir: string;
+  const originalUploadDir = process.env.AI_UPLOAD_DIR;
 
   beforeAll(async () => {
     testUploadDir = join(os.tmpdir(), `local-ai-harness-tests-${randomUUID()}`);
     await mkdir(testUploadDir, { recursive: true });
+    // Override upload directory for test isolation
+    overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
   });
 
   afterEach(async () => {
     if (app) {
       await app.close();
-      app = undefined as any;
+      app = undefined;
+    }
+    // Restore original upload dir
+    if (originalUploadDir) {
+      process.env.AI_UPLOAD_DIR = originalUploadDir;
+    } else {
+      delete process.env.AI_UPLOAD_DIR;
     }
     // Clean up test upload directory
     try {
@@ -48,8 +58,6 @@ describe("file upload endpoint", () => {
 
   it("uploads a .txt file successfully", async () => {
     app = buildApp();
-    // Override upload dir for test isolation
-    (app as any).config?.UPLOAD_DIR || process.env;
 
     const content = "Hello, this is a test text file.";
     const body = buildMultipartBody("test.txt", "text/plain", content);
@@ -193,7 +201,7 @@ describe("file upload endpoint", () => {
     const sse = (await import("@fastify/sse")).default;
 
     const testApp = Fastify({
-      bodyLimit: 1024, // 1 KB limit for testing
+      bodyLimit: 10 * 1024 * 1024, // 10 MB - high enough not to interfere
     });
 
     await testApp.register(cors, {
@@ -202,7 +210,7 @@ describe("file upload endpoint", () => {
     await testApp.register(sse);
     await testApp.register(multipart, {
       limits: {
-        fileSize: 1024, // 1 KB
+        fileSize: 1024, // 1 KB - this is what we're testing
         files: 1,
       },
     });
