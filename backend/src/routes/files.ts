@@ -34,98 +34,106 @@ function isMimeAllowed(filename: string, mimeType: string): boolean {
 }
 
 const filesRoute: FastifyPluginAsync = async (server) => {
-  server.post("/api/files", async (request, reply) => {
-    try {
-      const file = await request.file({
-        limits: { files: 1 },
-      });
-
-      if (!file) {
-        return reply.code(400).send({
-          success: false,
-          error: "No file uploaded. A single file is required.",
-        });
-      }
-
-      const originalFilename = file.filename;
-      const mimeType = file.mimetype;
-
-      // Validate extension
-      if (!isExtensionAllowed(originalFilename)) {
-        // Drain the stream to allow busboy to complete parsing
-        file.file.resume();
-        return reply.code(400).send({
-          success: false,
-          error: `File extension "${extname(originalFilename)}" is not supported. Allowed: .txt, .md, .pdf`,
-        });
-      }
-
-      // Validate MIME type
-      const ext = extname(originalFilename).toLowerCase();
-      if (!isMimeAllowed(originalFilename, mimeType)) {
-        // Drain the stream to allow busboy to complete parsing
-        file.file.resume();
-        return reply.code(400).send({
-          success: false,
-          error: `MIME type "${mimeType}" is not allowed for ${ext} files.`,
-        });
-      }
-
-      // Generate safe internal identity
-      const fileId = randomUUID();
-      const internalFilename = `${fileId}${ext}`;
-
-      // Ensure temp directory exists
-      await mkdir(config.UPLOAD_DIR, { recursive: true });
-
-      const destinationPath = join(config.UPLOAD_DIR, internalFilename);
-
-      // Stream directly to disk
+  server.post(
+    "/api/files",
+    {
+      config: {
+        requestTimeout: config.REQUEST_TIMEOUT_MS,
+      },
+    },
+    async (request, reply) => {
       try {
-        await pipeline(file.file, createWriteStream(destinationPath));
-      } catch (err) {
-        // Clean up partial file on failure
-        try {
-          await unlink(destinationPath);
-        } catch {
-          // Ignore cleanup errors
-        }
-        throw err;
-      }
+        const file = await request.file({
+          limits: { files: 1 },
+        });
 
-      // Check if the file was truncated by busboy (exceeded size limit)
-      if (file.file.truncated) {
-        // Clean up the partially written file
-        try {
-          await unlink(destinationPath);
-        } catch {
-          // Ignore cleanup errors
+        if (!file) {
+          return reply.code(400).send({
+            success: false,
+            error: "No file uploaded. A single file is required.",
+          });
         }
-        return reply.code(413).send({
+
+        const originalFilename = file.filename;
+        const mimeType = file.mimetype;
+
+        // Validate extension
+        if (!isExtensionAllowed(originalFilename)) {
+          // Drain the stream to allow busboy to complete parsing
+          file.file.resume();
+          return reply.code(400).send({
+            success: false,
+            error: `File extension "${extname(originalFilename)}" is not supported. Allowed: .txt, .md, .pdf`,
+          });
+        }
+
+        // Validate MIME type
+        const ext = extname(originalFilename).toLowerCase();
+        if (!isMimeAllowed(originalFilename, mimeType)) {
+          // Drain the stream to allow busboy to complete parsing
+          file.file.resume();
+          return reply.code(400).send({
+            success: false,
+            error: `MIME type "${mimeType}" is not allowed for ${ext} files.`,
+          });
+        }
+
+        // Generate safe internal identity
+        const fileId = randomUUID();
+        const internalFilename = `${fileId}${ext}`;
+
+        // Ensure temp directory exists
+        await mkdir(config.UPLOAD_DIR, { recursive: true });
+
+        const destinationPath = join(config.UPLOAD_DIR, internalFilename);
+
+        // Stream directly to disk
+        try {
+          await pipeline(file.file, createWriteStream(destinationPath));
+        } catch (err) {
+          // Clean up partial file on failure
+          try {
+            await unlink(destinationPath);
+          } catch {
+            // Ignore cleanup errors
+          }
+          throw err;
+        }
+
+        // Check if the file was truncated by busboy (exceeded size limit)
+        if (file.file.truncated) {
+          // Clean up the partially written file
+          try {
+            await unlink(destinationPath);
+          } catch {
+            // Ignore cleanup errors
+          }
+          return reply.code(413).send({
+            success: false,
+            error: "File exceeds the maximum allowed size.",
+          });
+        }
+
+        // Get file size from filesystem metadata
+        const fileStats = await stat(destinationPath);
+        const size = fileStats.size;
+
+        return reply.code(200).send({
+          success: true,
+          fileId,
+          originalFilename,
+          size,
+          type: mimeType,
+        });
+      } catch {
+        // Handle other errors gracefully
+        return reply.code(500).send({
           success: false,
-          error: "File exceeds the maximum allowed size.",
+          error: "Failed to process upload.",
         });
       }
-
-      // Get file size from filesystem metadata
-      const fileStats = await stat(destinationPath);
-      const size = fileStats.size;
-
-      return reply.code(200).send({
-        success: true,
-        fileId,
-        originalFilename,
-        size,
-        type: mimeType,
-      });
-    } catch {
-      // Handle other errors gracefully
-      return reply.code(500).send({
-        success: false,
-        error: "Failed to process upload.",
-      });
     }
-  });
+  );
 };
 
 export default filesRoute;
