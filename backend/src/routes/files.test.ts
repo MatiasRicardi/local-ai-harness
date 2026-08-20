@@ -209,43 +209,45 @@ describe("file upload endpoint", () => {
       bodyLimit: 10 * 1024 * 1024, // 10 MB - high enough not to interfere
     });
 
-    await testApp.register(cors, {
-      origin: ["http://localhost:5173"],
-    });
-    await testApp.register(sse);
-    await testApp.register(multipart, {
-      limits: {
-        fileSize: 1024, // 1 KB - this is what we're testing
-        files: 1,
-      },
-    });
+    try {
+      await testApp.register(cors, {
+        origin: ["http://localhost:5173"],
+      });
+      await testApp.register(sse);
+      await testApp.register(multipart, {
+        limits: {
+          fileSize: 1024, // 1 KB - this is what we're testing
+          files: 1,
+        },
+      });
 
-    // Register the files route
-    const filesRoute = (await import("./files.js")).default;
-    await testApp.register(filesRoute);
+      // Register the files route
+      const filesRoute = (await import("./files.js")).default;
+      await testApp.register(filesRoute);
 
-    // Create a file larger than 1 KB
-    const largeContent = "x".repeat(2048);
-    const body = buildMultipartBody("big.txt", "text/plain", largeContent);
+      // Create a file larger than 1 KB
+      const largeContent = "x".repeat(2048);
+      const body = buildMultipartBody("big.txt", "text/plain", largeContent);
 
-    const response = await testApp.inject({
-      method: "POST",
-      url: "/api/files",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
-      },
-      payload: body,
-    });
+      const response = await testApp.inject({
+        method: "POST",
+        url: "/api/files",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+        },
+        payload: body,
+      });
 
-    expect(response.statusCode).toBe(413);
-    const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("maximum allowed size");
+      expect(response.statusCode).toBe(413);
+      const json = JSON.parse(response.body);
+      expect(json.success).toBe(false);
+      expect(json.error).toContain("maximum allowed size");
 
-    // Verify no partial files remain in the upload directory
-    const filesAfter = await readdir(testUploadDir);
-    expect(filesAfter).toHaveLength(0);
-
-    await testApp.close();
+      // Verify no partial files remain in the upload directory
+      const filesAfter = await readdir(testUploadDir);
+      expect(filesAfter).toHaveLength(0);
+    } finally {
+      await testApp.close();
+    }
   });
 });

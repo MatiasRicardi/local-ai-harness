@@ -127,17 +127,28 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           type: mimeType,
         });
       } catch (err) {
-        // Handle multipart-specific errors with appropriate status codes
-        const errorName = (err as Error).name;
+        // Handle multipart-specific errors by matching error codes
+        const multipartError = err as { code?: string; statusCode?: number };
+        const errorCode = multipartError.code;
         
-        if (errorName === "RequestFileTooLargeError" || errorName === "FilesLimitError" || errorName === "PartsLimitError" || errorName === "FieldsLimitError") {
+        // Size/count-limit errors (413)
+        if (
+          errorCode === "FST_REQ_FILE_TOO_LARGE" ||
+          errorCode === "FST_FILES_LIMIT" ||
+          errorCode === "FST_PARTS_LIMIT" ||
+          errorCode === "FST_FIELDS_LIMIT"
+        ) {
           return reply.code(413).send({
             success: false,
             error: "Upload exceeds size or count limits.",
           });
         }
         
-        if (errorName === "PrematureCloseError" || errorName === "InvalidMultipartContentTypeError") {
+        // Premature close or invalid content type errors (400)
+        if (
+          errorCode === "FST_MP_PREMATURE_CLOSE" ||
+          errorCode === "FST_PROTO_VIOLATION"
+        ) {
           return reply.code(400).send({
             success: false,
             error: "Invalid upload request.",
