@@ -46,7 +46,7 @@ describe("file upload endpoint", () => {
     testUploadDir = join(os.tmpdir(), `local-ai-harness-tests-${randomUUID()}`);
     await mkdir(testUploadDir, { recursive: true });
     // Override upload directory for test isolation
-    overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
+    overrideConfig({ UPLOAD_DIR: testUploadDir });
   });
 
   afterEach(async () => {
@@ -70,7 +70,9 @@ describe("file upload endpoint", () => {
 
   afterAll(async () => {
     // Restore original config.UPLOAD_DIR
-    overrideConfig({ UPLOAD_DIR: originalUploadDir } as any);
+    if (originalUploadDir !== undefined) {
+      overrideConfig({ UPLOAD_DIR: originalUploadDir });
+    }
   });
 
   it("uploads a .txt file successfully", async () => {
@@ -506,7 +508,7 @@ describe("file upload endpoint", () => {
 
     // Use the valid test upload directory so mkdir succeeds and destinationPath gets assigned.
     // This ensures the cleanup branch (which checks destinationPath) is actually exercised.
-    overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
+    overrideConfig({ UPLOAD_DIR: testUploadDir });
 
     // Override createWriteStream to simulate a write failure after destinationPath is assigned.
     // The implementation creates a partial file on disk, then returns a stream that errors,
@@ -572,7 +574,7 @@ describe("file upload endpoint", () => {
       expect(filesAfter).toHaveLength(0);
     } finally {
       createWriteStreamMock.mockRestore();
-      overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
+      overrideConfig({ UPLOAD_DIR: testUploadDir });
       await testApp.close();
     }
   });
