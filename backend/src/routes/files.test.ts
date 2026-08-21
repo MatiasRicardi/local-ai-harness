@@ -1,10 +1,22 @@
-import { describe, it, expect, afterEach, afterAll, beforeAll } from "vitest";
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from "vitest";
 import { buildApp } from "../app.js";
 import { overrideConfig } from "../config/env.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, readdir } from "node:fs/promises";
+import * as fs from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
+import { Writable } from "node:stream";
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual("node:fs");
+  return {
+    ...actual,
+    createWriteStream: vi.fn((_path: unknown) =>
+      (actual as typeof import("node:fs")).createWriteStream(_path as string),
+    ),
+  };
+});
 
 const BOUNDARY = "----TestBoundary" + randomUUID();
 
@@ -487,15 +499,37 @@ describe("file upload endpoint", () => {
   });
 
   it("write failure removes partial file", async () => {
-    // Use an invalid path to simulate write failure in a root-safe way
     const Fastify = (await import("fastify")).default;
     const multipart = (await import("@fastify/multipart")).default;
     const cors = (await import("@fastify/cors")).default;
     const sse = (await import("@fastify/sse")).default;
-    const invalidUploadDir = "/dev/null/local-ai-harness-test-upload";
 
-    // Override config to use an invalid location (mkdir will fail with ENOTDIR)
-    overrideConfig({ UPLOAD_DIR: invalidUploadDir } as any);
+    // Use the valid test upload directory so mkdir succeeds and destinationPath gets assigned.
+    // This ensures the cleanup branch (which checks destinationPath) is actually exercised.
+    overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
+
+    // Override createWriteStream to simulate a write failure after destinationPath is assigned.
+    // The implementation creates a partial file on disk, then returns a stream that errors,
+    // so we can verify the cleanup branch actually removes the partial file.
+    const errorStream = new Writable({
+      write(
+        _chunk: Buffer,
+        _encoding: string,
+        callback: (err: Error | null) => void,
+      ) {
+        callback(new Error("simulated write failure"));
+      },
+    });
+    const createWriteStreamMock = fs.createWriteStream as unknown as {
+      mockImplementation: (fn: (path: unknown) => Writable) => void;
+      mockRestore: () => void;
+    };
+    createWriteStreamMock.mockImplementation((_path: unknown) => {
+      // Create a partial file on disk to simulate what happens before the write fails.
+      // This allows us to verify the cleanup branch actually removes it.
+      fs.writeFileSync(_path as string, "partial content");
+      return errorStream;
+    });
 
     const testApp = Fastify({
       bodyLimit: 10 * 1024 * 1024,
@@ -528,17 +562,16 @@ describe("file upload endpoint", () => {
         payload: body,
       });
 
-      // Should fail with 500 due to filesystem error while creating destination path
+      // Should fail with 500 due to write stream error
       expect(response.statusCode).toBe(500);
       const json = JSON.parse(response.body);
       expect(json.success).toBe(false);
 
-      // Verify no partial file was left behind in the test upload dir used elsewhere
-      await mkdir(testUploadDir, { recursive: true });
+      // Verify the cleanup branch removed the partial file from the upload directory
       const filesAfter = await readdir(testUploadDir);
       expect(filesAfter).toHaveLength(0);
     } finally {
-      // Restore test upload dir for following tests
+      createWriteStreamMock.mockRestore();
       overrideConfig({ UPLOAD_DIR: testUploadDir } as any);
       await testApp.close();
     }
