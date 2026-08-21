@@ -88,3 +88,10 @@ export type Config = z.infer<typeof envSchema> & {
 
 // Export default configuration for testing
 export const config = loadConfig();
+
+/**
+ * Override configuration values (useful for testing).
+ */
+export function overrideConfig(overrides: Partial<Config>): void {
+  Object.assign(config, overrides);
+}
