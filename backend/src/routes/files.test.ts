@@ -594,4 +594,191 @@ describe("file upload endpoint", () => {
     expect(json.success).toBe(true);
     expect(json.type).toBe("text/plain");
   });
+
+  // --- Step 16 extraction tests ---
+
+  it("extracts text from a .txt file and returns extraction in response", async () => {
+    app = buildApp();
+
+    const content = "Hello, this is a test text file.";
+    const body = buildMultipartBody("test.txt", "text/plain", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.fileId).toBeDefined();
+    expect(json.originalFilename).toBe("test.txt");
+    expect(json.size).toBeGreaterThan(0);
+    expect(json.type).toBe("text/plain");
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.text).toBe(content);
+    expect(json.extraction.characterCount).toBe(content.length);
+    expect(json.extraction.warnings).toHaveLength(0);
+  });
+
+  it("extracts Markdown from a .md file and preserves syntax", async () => {
+    app = buildApp();
+
+    const content = "# Project Notes\n\n## Setup\n\nRun:\n\n```bash\npnpm install\n```\n\n- Item one\n- Item two";
+    const body = buildMultipartBody("notes.md", "text/markdown", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.text).toBe(content);
+    // Verify Markdown syntax is preserved
+    expect(json.extraction.text).toContain("# Project Notes");
+    expect(json.extraction.text).toContain("```bash");
+    expect(json.extraction.text).toContain("- Item one");
+    // Verify no HTML conversion
+    expect(json.extraction.text).not.toContain("<h1>");
+    expect(json.extraction.text).not.toContain("<p>");
+  });
+
+  it("rejects empty .txt file and cleans up temp file", async () => {
+    app = buildApp();
+
+    const body = buildMultipartBody("empty.txt", "text/plain", "");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("does not contain usable text");
+
+    // Verify no temp file remains
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".txt"))).toHaveLength(0);
+  });
+
+  it("rejects binary-like .txt file and cleans up temp file", async () => {
+    app = buildApp();
+
+    // Content dominated by suspicious control characters
+    const binaryContent = "\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008"
+      .repeat(10);
+    const body = buildMultipartBody("binary.txt", "text/plain", binaryContent);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("does not appear to contain usable text");
+
+    // Verify no temp file remains
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".txt"))).toHaveLength(0);
+  });
+
+  it("surfaces warning for null bytes in uploaded .txt", async () => {
+    app = buildApp();
+
+    const content = "hello\u0000world";
+    const body = buildMultipartBody("nulls.txt", "text/plain", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.text).toBe("helloworld");
+    expect(json.extraction.warnings).toContain(
+      "Null bytes were removed from the extracted text."
+    );
+  });
+
+  it("surfaces warning for invalid UTF-8 in uploaded .txt", async () => {
+    app = buildApp();
+
+    // Buffer with actual invalid UTF-8 byte (0x80)
+    const content = Buffer.from([0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x80, 0x2C, 0x20, 0x57, 0x6F, 0x72, 0x6C, 0x64]);
+    const body = buildMultipartBody("bad-utf8.txt", "text/plain", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.text).toContain("Hello");
+    expect(json.extraction.text).toContain("World");
+    expect(json.extraction.warnings).toContain(
+      "The file contained invalid UTF-8 sequences that were replaced."
+    );
+  });
+
+  it("PDF upload behavior remains unchanged (no extraction field)", async () => {
+    app = buildApp();
+
+    const content = "%PDF-1.4 minimal test pdf";
+    const body = buildMultipartBody("report.pdf", "application/pdf", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.fileId).toBeDefined();
+    expect(json.originalFilename).toBe("report.pdf");
+    expect(json.type).toBe("application/pdf");
+    // PDF should NOT have extraction field
+    expect(json.extraction).toBeUndefined();
+  });
 });
