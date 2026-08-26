@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from "vitest";
 import { buildApp } from "../app.js";
-import { overrideConfig } from "../config/env.js";
+import { overrideConfig, config } from "../config/env.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, readdir } from "node:fs/promises";
 import * as fs from "node:fs";
@@ -40,7 +40,7 @@ function buildMultipartBody(filename: string, mimeType: string, content: string 
 describe("file upload endpoint", () => {
   let app: ReturnType<typeof buildApp> | undefined;
   let testUploadDir: string;
-  const originalUploadDir = process.env.AI_UPLOAD_DIR;
+  const originalUploadDir = config.UPLOAD_DIR;
 
   beforeAll(async () => {
     testUploadDir = join(os.tmpdir(), `local-ai-harness-tests-${randomUUID()}`);
@@ -54,15 +54,10 @@ describe("file upload endpoint", () => {
       await app.close();
       app = undefined;
     }
-    // Restore original upload dir
-    if (originalUploadDir) {
-      process.env.AI_UPLOAD_DIR = originalUploadDir;
-    } else {
-      delete process.env.AI_UPLOAD_DIR;
-    }
-    // Clean up test upload directory
+    // Clean up test upload directory contents
     try {
       await rm(testUploadDir, { recursive: true, force: true });
+      await mkdir(testUploadDir, { recursive: true });
     } catch {
       // ignore
     }
@@ -70,9 +65,7 @@ describe("file upload endpoint", () => {
 
   afterAll(async () => {
     // Restore original config.UPLOAD_DIR
-    if (originalUploadDir !== undefined) {
-      overrideConfig({ UPLOAD_DIR: originalUploadDir });
-    }
+    overrideConfig({ UPLOAD_DIR: originalUploadDir });
   });
 
   it("uploads a .txt file successfully", async () => {
@@ -574,7 +567,7 @@ describe("file upload endpoint", () => {
       expect(filesAfter).toHaveLength(0);
     } finally {
       createWriteStreamMock.mockRestore();
-      overrideConfig({ UPLOAD_DIR: testUploadDir });
+      overrideConfig({ UPLOAD_DIR: originalUploadDir });
       await testApp.close();
     }
   });
