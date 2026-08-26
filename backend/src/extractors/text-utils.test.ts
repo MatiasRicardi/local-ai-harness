@@ -78,6 +78,36 @@ describe("text-utils", () => {
       expect(cleaned).toBe("para1\n\npara2");
     });
 
+    it("normalizes excessive blank lines with CRLF endings", () => {
+      const text = "para1\r\n\r\n\r\n\r\npara2";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\npara2");
+    });
+
+    it("normalizes blank lines containing spaces", () => {
+      const text = "para1\n \n \npara2";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\npara2");
+    });
+
+    it("normalizes blank lines containing tabs", () => {
+      const text = "para1\n\t\n\t\npara2";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\npara2");
+    });
+
+    it("normalizes mixed blank lines (empty, spaces, tabs)", () => {
+      const text = "para1\n\n \n\t\npara2";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\npara2");
+    });
+
+    it("normalizes CRLF blank lines with trailing whitespace", () => {
+      const text = "para1\r\n \r\n\r\npara2";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\npara2");
+    });
+
     it("preserves one blank line between paragraphs", () => {
       const text = "para1\n\npara2";
       const { text: cleaned } = cleanExtractedText(text, false);
