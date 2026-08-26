@@ -64,8 +64,11 @@ describe("file upload endpoint", () => {
   });
 
   afterAll(async () => {
-    // Restore original config.UPLOAD_DIR
-    overrideConfig({ UPLOAD_DIR: originalUploadDir });
+    try {
+      await rm(testUploadDir, { recursive: true, force: true });
+    } finally {
+      overrideConfig({ UPLOAD_DIR: originalUploadDir });
+    }
   });
 
   it("uploads a .txt file successfully", async () => {
@@ -567,7 +570,6 @@ describe("file upload endpoint", () => {
       expect(filesAfter).toHaveLength(0);
     } finally {
       createWriteStreamMock.mockRestore();
-      overrideConfig({ UPLOAD_DIR: originalUploadDir });
       await testApp.close();
     }
   });
