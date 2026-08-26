@@ -26,7 +26,7 @@ export function buildApp(): FastifyInstance {
   app.register(multipart, {
     limits: {
       fileSize: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024,
-      files: 1,
+      files: Infinity,
     },
   });
 
