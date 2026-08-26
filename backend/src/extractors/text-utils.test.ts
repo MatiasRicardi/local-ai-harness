@@ -108,6 +108,18 @@ describe("text-utils", () => {
       expect(cleaned).toBe("para1\n\npara2");
     });
 
+    it("preserves indentation after blank lines (regression)", () => {
+      const text = "para1\n\n\n    code";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\n    code");
+    });
+
+    it("preserves tab indentation after blank lines", () => {
+      const text = "para1\n\n\n\tindented";
+      const { text: cleaned } = cleanExtractedText(text, false);
+      expect(cleaned).toBe("para1\n\n\tindented");
+    });
+
     it("preserves one blank line between paragraphs", () => {
       const text = "para1\n\npara2";
       const { text: cleaned } = cleanExtractedText(text, false);

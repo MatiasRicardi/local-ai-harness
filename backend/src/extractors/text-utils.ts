@@ -38,12 +38,14 @@ export function countSuspiciousControls(text: string): number {
  * Normalize excessive consecutive blank lines to at most one.
  * A blank line is a line containing only whitespace (or empty).
  * Handles LF, CRLF, and blank lines containing spaces or tabs.
+ * Preserves indentation on non-blank lines (e.g., Markdown code blocks).
  */
 function normalizeBlankLines(text: string): string {
   // First, normalize all line endings to LF
   const lfText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  // Collapse runs of 2+ blank lines (including whitespace-only) to exactly one blank line
-  return lfText.replace(/(\n\s*){2,}/g, "\n\n");
+  // Collapse runs of 2+ blank lines (whitespace-only) to exactly one blank line.
+  // [^\S\r\n] matches spaces/tabs but NOT newlines, so indentation on non-blank lines is preserved.
+  return lfText.replace(/\n(?:[^\S\r\n]*\n)+/g, "\n\n");
 }
 
 /**
