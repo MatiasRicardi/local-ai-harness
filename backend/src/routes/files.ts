@@ -8,6 +8,10 @@ import type { FastifyPluginAsync } from "fastify";
 import type { FastifyMultipartBaseOptions } from "@fastify/multipart";
 import { consola } from "consola";
 import { config } from "../config/env.js";
+import { extractTxt } from "../extractors/txt.js";
+import { extractMarkdown } from "../extractors/markdown.js";
+import { ExtractionError } from "../extractors/ExtractionError.js";
+import type { ExtractionResult } from "../extractors/types.js";
 
 const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".pdf"]);
 
@@ -162,11 +166,21 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           const fileStats = await stat(destinationPath);
           const size = fileStats.size;
 
+          // Extract text for TXT and Markdown files
+          let extraction: ExtractionResult | undefined;
+          const fileExt = ext.toLowerCase();
+          if (fileExt === ".txt") {
+            extraction = await extractTxt(destinationPath);
+          } else if (fileExt === ".md") {
+            extraction = await extractMarkdown(destinationPath);
+          }
+
           responsePayload = {
             fileId,
             originalFilename,
             size,
             type: mimeType,
+            ...(extraction ? { extraction } : {}),
           };
         }
 
@@ -241,6 +255,14 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           return reply.code(400).send({
             success: false,
             error: "Invalid upload request.",
+          });
+        }
+
+        // Map ExtractionError to 400
+        if (err instanceof ExtractionError) {
+          return reply.code(400).send({
+            success: false,
+            error: err.message,
           });
         }
 
