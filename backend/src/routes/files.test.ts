@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { Writable } from "node:stream";
+import { readFile } from "node:fs/promises";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
@@ -125,8 +126,9 @@ describe("file upload endpoint", () => {
   it("uploads a .pdf file successfully", async () => {
     app = buildApp();
 
-    // Minimal PDF content (just enough to be a valid upload)
-    const content = "%PDF-1.4 minimal test pdf";
+    // Load valid PDF fixture
+    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("report.pdf", "application/pdf", content);
 
     const response = await app.inject({
@@ -144,6 +146,9 @@ describe("file upload endpoint", () => {
     expect(json.fileId).toBeDefined();
     expect(json.originalFilename).toBe("report.pdf");
     expect(json.type).toBe("application/pdf");
+    // PDF extraction should include pageCount
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.pageCount).toBe(1);
   });
 
   it("generates a UUID that is different from the original filename", async () => {
@@ -266,7 +271,9 @@ describe("file upload endpoint", () => {
   it("accepts uppercase extension (REPORT.PDF)", async () => {
     app = buildApp();
 
-    const content = "REPORT CONTENT";
+    // Load valid PDF fixture
+    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("REPORT.PDF", "application/pdf", content);
 
     const response = await app.inject({
@@ -437,7 +444,9 @@ describe("file upload endpoint", () => {
   it("duplicate original filenames do not collide", async () => {
     app = buildApp();
 
-    const content = "same filename upload";
+    // Load valid PDF fixture
+    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const content = await readFile(pdfFixturePath);
     const body1 = buildMultipartBody("statement.pdf", "application/pdf", content);
     const body2 = buildMultipartBody("statement.pdf", "application/pdf", content);
 
@@ -757,10 +766,12 @@ describe("file upload endpoint", () => {
     );
   });
 
-  it("PDF upload behavior remains unchanged (no extraction field)", async () => {
+  it("PDF upload returns extraction with pageCount", async () => {
     app = buildApp();
 
-    const content = "%PDF-1.4 minimal test pdf";
+    // Load valid PDF fixture
+    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("report.pdf", "application/pdf", content);
 
     const response = await app.inject({
@@ -778,7 +789,85 @@ describe("file upload endpoint", () => {
     expect(json.fileId).toBeDefined();
     expect(json.originalFilename).toBe("report.pdf");
     expect(json.type).toBe("application/pdf");
-    // PDF should NOT have extraction field
+    // PDF should have extraction with pageCount
+    expect(json.extraction).toBeDefined();
+    expect(json.extraction.pageCount).toBe(1);
+    expect(json.extraction.text).toBe("Hello World Fixture");
+    expect(json.extraction.characterCount).toBe("Hello World Fixture".length);
+  });
+
+  // --- Step 17 PDF extraction integration tests ---
+
+  it("rejects no-text (scanned-like) PDF with safe message and cleans up temp file", async () => {
+    app = buildApp();
+
+    const pdfFixturePath = new URL(
+      "../../test/fixtures/pdf/no-text.pdf",
+      import.meta.url,
+    ).pathname;
+    const content = await readFile(pdfFixturePath);
+    const body = buildMultipartBody("scanned.pdf", "application/pdf", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("no extractable text");
+    expect(json.error).toContain("scanned");
+    // No fileId or extraction on failure
+    expect(json.fileId).toBeUndefined();
     expect(json.extraction).toBeUndefined();
+    // Verify no temp file remains
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".pdf"))).toHaveLength(0);
+    // No internal path exposed
+    expect(response.body).not.toContain(testUploadDir);
+    expect(response.body).not.toContain("/tmp");
+  });
+
+  it("rejects malformed PDF with safe message, no parser/path leak, and cleans up temp file", async () => {
+    app = buildApp();
+
+    const pdfFixturePath = new URL(
+      "../../test/fixtures/pdf/malformed.pdf",
+      import.meta.url,
+    ).pathname;
+    const content = await readFile(pdfFixturePath);
+    const body = buildMultipartBody("corrupt.pdf", "application/pdf", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(false);
+    expect(json.error).toContain("could not be processed");
+    // No fileId or extraction on failure
+    expect(json.fileId).toBeUndefined();
+    expect(json.extraction).toBeUndefined();
+    // Verify no temp file remains
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".pdf"))).toHaveLength(0);
+    // No raw parser details or internal paths exposed
+    expect(response.body).not.toContain("XRef");
+    expect(response.body).not.toContain("SyntaxError");
+    expect(response.body).not.toContain("FormatError");
+    expect(response.body).not.toContain(testUploadDir);
+    expect(response.body).not.toContain("/tmp");
+    expect(response.body).not.toContain("node_modules");
   });
 });

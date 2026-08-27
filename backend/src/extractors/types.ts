@@ -3,3 +3,7 @@ export interface ExtractionResult {
   characterCount: number;
   warnings: string[];
 }
+
+export interface PdfExtractionResult extends ExtractionResult {
+  pageCount: number;
+}
