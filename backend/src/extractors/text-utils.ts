@@ -15,6 +15,21 @@ const SUSPICIOUS_CONTROL_RANGES: [number, number][] = [
  * Suspicious = code points in ranges like U+0000-U+0008, U+000B, U+000C, U+000E-U+001F.
  * Normal text whitespace (tab, newline, carriage return) is excluded.
  */
+/**
+ * Count Unicode code points in a string.
+ * Surrogate pairs (astral characters) count as one code point.
+ */
+export function countCodePoints(text: string): number {
+  let count = 0;
+  for (let i = 0; i < text.length; i++) {
+    const cp = text.codePointAt(i);
+    if (cp === undefined) continue;
+    if (cp > 0xffff) i++; // skip surrogate pair second half
+    count++;
+  }
+  return count;
+}
+
 export function countSuspiciousControls(text: string): number {
   let count = 0;
   for (let i = 0; i < text.length; i++) {

@@ -4,10 +4,29 @@ import {
   isBinaryLike,
   validateUsableText,
   countSuspiciousControls,
+  countCodePoints,
 } from "./text-utils.js";
 import { ExtractionError } from "./ExtractionError.js";
 
 describe("text-utils", () => {
+  describe("countCodePoints", () => {
+    it("counts ASCII characters correctly", () => {
+      expect(countCodePoints("Hello, world!")).toBe(13);
+    });
+
+    it("counts surrogate pairs as one code point", () => {
+      // U+1F600 (😀) is a single code point but 2 UTF-16 units
+      expect(countCodePoints("😀")).toBe(1);
+      expect("😀".length).toBe(2); // UTF-16 code units
+    });
+
+    it("counts mixed ASCII and astral characters", () => {
+      const text = "abc😀def";
+      expect(countCodePoints(text)).toBe(7);
+      expect(text.length).toBe(8); // 3 + 2 + 3
+    });
+  });
+
   describe("countSuspiciousControls", () => {
     it("returns 0 for normal text", () => {
       expect(countSuspiciousControls("Hello, world!")).toBe(0);
@@ -187,6 +206,21 @@ describe("text-utils", () => {
 
     it("returns true at exactly 10% threshold", () => {
       expect(isBinaryLike(10, 100)).toBe(true); // exactly 10%
+    });
+
+    it("correctly rejects when code points denominator is used", () => {
+      // 33 code points (25 ASCII + 5 astral + 3 suspicious), 3 suspicious controls
+      // Code points: 33 → 3/33 = 9.1% (would accept if using length)
+      // UTF-16 length: 38 → 3/38 = 7.9% (would accept even more)
+      // Use 4 suspicious to hit 10% threshold: 4/34 = 11.8% (rejects)
+      const astralChars = "😀".repeat(5); // 5 code points, 10 UTF-16 units
+      const ascii = "a".repeat(25);       // 25 code points, 25 UTF-16 units
+      const suspicious = "\u0001\u0002\u0003\u0004"; // 4 suspicious controls
+      const text = ascii + astralChars + suspicious;
+      
+      expect(countCodePoints(text)).toBe(34); // 25 + 5 + 4
+      expect(text.length).toBe(39); // 25 + 10 + 4
+      expect(isBinaryLike(4, 34)).toBe(true); // 11.8% threshold
     });
   });
 });

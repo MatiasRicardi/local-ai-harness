@@ -5,6 +5,7 @@ import {
   isBinaryLike,
   validateUsableText,
   countSuspiciousControls,
+  countCodePoints,
 } from "./text-utils.js";
 import { ExtractionError } from "./ExtractionError.js";
 
@@ -27,7 +28,7 @@ export async function extractTxt(filePath: string): Promise<ExtractionResult> {
     hasInvalidUtf8 = true;
   }
 
-  const originalLength = rawText.length;
+  const originalLength = countCodePoints(rawText);
   const suspiciousControlCount = countSuspiciousControls(rawText);
 
   // Binary-like check before cleanup
