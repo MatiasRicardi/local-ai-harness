@@ -40,16 +40,26 @@ export async function extractPdf(filePath: string): Promise<PdfExtractionResult>
     }
 
     // Enforce extraction timeout to prevent hung requests
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const extractionPromise = extractText(doc, { mergePages: false });
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(
+      timeoutHandle = setTimeout(
         () => reject(new Error(`PDF extraction timed out after ${EXTRACTION_TIMEOUT_MS}ms`)),
         EXTRACTION_TIMEOUT_MS,
       );
     });
-    const result = await Promise.race([extractionPromise, timeoutPromise]);
-    totalPages = result.totalPages;
-    pageTexts = result.text;
+    try {
+      const result = await Promise.race([extractionPromise, timeoutPromise]);
+      totalPages = result.totalPages;
+      pageTexts = result.text;
+    } finally {
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+      if (doc.loadingTask) {
+        await doc.loadingTask.destroy();
+      }
+    }
   } catch (err) {
     // Normalize PDF parsing errors to safe messages
     const errorMessage = err instanceof Error ? err.message : String(err);

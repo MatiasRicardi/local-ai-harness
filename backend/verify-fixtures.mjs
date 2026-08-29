@@ -13,8 +13,12 @@ const fixturesDir = join(
 
 async function testFile(name, expectError = false) {
   console.log(`\n=== ${name} ===`);
+
+  // Read file outside the parser try/catch so ENOENT is not swallowed
+  // by the expected-malformed error handling.
+  const data = await readFile(join(fixturesDir, name));
+
   try {
-    const data = await readFile(join(fixturesDir, name));
     const pdf = await getDocumentProxy(new Uint8Array(data));
     console.log("numPages:", pdf.numPages);
     const result = await extractText(pdf, { mergePages: false });
@@ -26,11 +30,19 @@ async function testFile(name, expectError = false) {
       process.exitCode = 1;
     }
   } catch (err) {
-    console.log("Error name:", err?.name);
-    console.log("Error message:", err?.message?.substring(0, 200));
-    if (!expectError) {
-      process.exitCode = 1;
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorName = err instanceof Error ? err.name : "Unknown";
+
+    // Only treat the specific malformed-PDF parser error as expected
+    if (expectError && errorName === "InvalidPDFException") {
+      console.log("Error name:", errorName);
+      console.log("Error message:", errorMessage.substring(0, 200));
+      return;
     }
+
+    console.log("Error name:", errorName);
+    console.log("Error message:", errorMessage.substring(0, 200));
+    process.exitCode = 1;
   }
 }
 
