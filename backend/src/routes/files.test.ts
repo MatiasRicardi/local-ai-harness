@@ -8,6 +8,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { Writable } from "node:stream";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
@@ -127,7 +128,7 @@ describe("file upload endpoint", () => {
     app = buildApp();
 
     // Load valid PDF fixture
-    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const pdfFixturePath = fileURLToPath(new URL("../../test/fixtures/pdf/text.pdf", import.meta.url));
     const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("report.pdf", "application/pdf", content);
 
@@ -272,7 +273,7 @@ describe("file upload endpoint", () => {
     app = buildApp();
 
     // Load valid PDF fixture
-    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const pdfFixturePath = fileURLToPath(new URL("../../test/fixtures/pdf/text.pdf", import.meta.url));
     const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("REPORT.PDF", "application/pdf", content);
 
@@ -445,7 +446,7 @@ describe("file upload endpoint", () => {
     app = buildApp();
 
     // Load valid PDF fixture
-    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const pdfFixturePath = fileURLToPath(new URL("../../test/fixtures/pdf/text.pdf", import.meta.url));
     const content = await readFile(pdfFixturePath);
     const body1 = buildMultipartBody("statement.pdf", "application/pdf", content);
     const body2 = buildMultipartBody("statement.pdf", "application/pdf", content);
@@ -770,7 +771,7 @@ describe("file upload endpoint", () => {
     app = buildApp();
 
     // Load valid PDF fixture
-    const pdfFixturePath = new URL("../../test/fixtures/pdf/text.pdf", import.meta.url).pathname;
+    const pdfFixturePath = fileURLToPath(new URL("../../test/fixtures/pdf/text.pdf", import.meta.url));
     const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("report.pdf", "application/pdf", content);
 
@@ -801,10 +802,10 @@ describe("file upload endpoint", () => {
   it("rejects no-text (scanned-like) PDF with safe message and cleans up temp file", async () => {
     app = buildApp();
 
-    const pdfFixturePath = new URL(
+    const pdfFixturePath = fileURLToPath(new URL(
       "../../test/fixtures/pdf/no-text.pdf",
       import.meta.url,
-    ).pathname;
+    ));
     const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("scanned.pdf", "application/pdf", content);
 
@@ -836,10 +837,10 @@ describe("file upload endpoint", () => {
   it("rejects malformed PDF with safe message, no parser/path leak, and cleans up temp file", async () => {
     app = buildApp();
 
-    const pdfFixturePath = new URL(
+    const pdfFixturePath = fileURLToPath(new URL(
       "../../test/fixtures/pdf/malformed.pdf",
       import.meta.url,
-    ).pathname;
+    ));
     const content = await readFile(pdfFixturePath);
     const body = buildMultipartBody("corrupt.pdf", "application/pdf", content);
 

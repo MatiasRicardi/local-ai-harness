@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
-const dir = new URL("./test/fixtures/pdf/", import.meta.url).pathname;
+const dir = fileURLToPath(new URL("./test/fixtures/pdf/", import.meta.url));
 await mkdir(dir, { recursive: true });
 
 function zp(num, len) {
@@ -65,7 +66,7 @@ function buildMultiPagePdf(pageTexts) {
   }
 
   const offs = [hLen, hLen + obj1.length, hLen + obj1.length + obj2.length, hLen + obj1.length + obj2.length + obj3.length];
-  let cum = offs[3] + obj3.length;
+  let cum = offs[3];
   for (let i = 0; i < n; i++) {
     offs.push(cum);
     cum += pageObjs[i].length;
@@ -83,7 +84,11 @@ function buildMultiPagePdf(pageTexts) {
 
   const trailer = "trailer\n<< /Size " + totalEntries + " /Root 1 0 R >>\nstartxref\n" + xrefStart + "\n%%EOF\n";
 
-  return Buffer.concat([header, obj1, obj2, obj3, ...pageObjs, ...streamObjs, Buffer.from(xref), Buffer.from(trailer)]);
+  const pageAndStreamObjs = pageObjs.flatMap((pageObj, index) => [
+    pageObj,
+    streamObjs[index],
+  ]);
+  return Buffer.concat([header, obj1, obj2, obj3, ...pageAndStreamObjs, Buffer.from(xref), Buffer.from(trailer)]);
 }
 
 function buildBlankPdf() {

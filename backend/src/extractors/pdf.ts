@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { extractText } from "unpdf";
+import { getDocumentProxy, extractText } from "unpdf";
 import type { PdfExtractionResult } from "./types.js";
 import { ExtractionError } from "./ExtractionError.js";
+
+const MAX_PAGES = 100;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB per image
+const EXTRACTION_TIMEOUT_MS = 60_000; // 60 seconds
 
 /**
  * Extract text from a PDF file using unpdf.
@@ -9,6 +13,9 @@ import { ExtractionError } from "./ExtractionError.js";
  * Supports PDFs with selectable text.
  * PDFs with no usable text (e.g. scanned/image-only) throw ExtractionError.
  * Malformed/corrupt PDFs are normalized to a safe ExtractionError message.
+ *
+ * Resources are bounded: image size is capped, page count is rejected above
+ * MAX_PAGES, and extraction is enforced with a timeout to prevent DoS.
  */
 export async function extractPdf(filePath: string): Promise<PdfExtractionResult> {
   // readFile failures (e.g. file deleted between stream-write and extraction)
@@ -20,10 +27,27 @@ export async function extractPdf(filePath: string): Promise<PdfExtractionResult>
   let pageTexts: string[];
 
   try {
-    // Note: maxImageSize is not exposed through extractText's public options API
-    // in unpdf@1.8.1 (DocumentInitParameters lives in an internal types path).
-    // Omitted intentionally — the parser's defaults are sufficient for Step 17.
-    const result = await extractText(data, { mergePages: false });
+    // Load with bounded parameters to prevent resource exhaustion
+    const doc = await getDocumentProxy(data, {
+      maxImageSize: MAX_IMAGE_SIZE,
+    });
+
+    // Reject documents exceeding the page limit before extraction
+    if (doc.numPages > MAX_PAGES) {
+      throw new ExtractionError(
+        `The PDF contains ${doc.numPages} pages, which exceeds the maximum allowed (${MAX_PAGES}).`,
+      );
+    }
+
+    // Enforce extraction timeout to prevent hung requests
+    const extractionPromise = extractText(doc, { mergePages: false });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`PDF extraction timed out after ${EXTRACTION_TIMEOUT_MS}ms`)),
+        EXTRACTION_TIMEOUT_MS,
+      );
+    });
+    const result = await Promise.race([extractionPromise, timeoutPromise]);
     totalPages = result.totalPages;
     pageTexts = result.text;
   } catch (err) {
@@ -54,6 +78,13 @@ export async function extractPdf(filePath: string): Promise<PdfExtractionResult>
       errorName === "FormatError"
     ) {
       throw new ExtractionError("The PDF could not be processed.");
+    }
+
+    // Timeout errors from extraction
+    if (errorMessage.includes("timed out")) {
+      throw new ExtractionError(
+        "The PDF extraction took too long and was cancelled.",
+      );
     }
 
     // Re-throw unexpected errors (runtime, programming) as-is for 500 path

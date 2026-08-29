@@ -4,9 +4,10 @@ import { ExtractionError } from "./ExtractionError.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 
-const FIXTURES_DIR = new URL("../../test/fixtures/pdf/", import.meta.url).pathname;
+const FIXTURES_DIR = fileURLToPath(new URL("../../test/fixtures/pdf/", import.meta.url));
 
 describe("extractPdf", () => {
   let tempDir: string;
