@@ -10,6 +10,7 @@ import { consola } from "consola";
 import { config } from "../config/env.js";
 import { extractTxt } from "../extractors/txt.js";
 import { extractMarkdown } from "../extractors/markdown.js";
+import { extractPdf } from "../extractors/pdf.js";
 import { ExtractionError } from "../extractors/ExtractionError.js";
 import type { ExtractionResult } from "../extractors/types.js";
 
@@ -166,13 +167,15 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           const fileStats = await stat(destinationPath);
           const size = fileStats.size;
 
-          // Extract text for TXT and Markdown files
+          // Extract text for TXT, Markdown, and PDF files
           let extraction: ExtractionResult | undefined;
           const fileExt = ext.toLowerCase();
           if (fileExt === ".txt") {
             extraction = await extractTxt(destinationPath);
           } else if (fileExt === ".md") {
             extraction = await extractMarkdown(destinationPath);
+          } else if (fileExt === ".pdf") {
+            extraction = await extractPdf(destinationPath);
           }
 
           responsePayload = {
