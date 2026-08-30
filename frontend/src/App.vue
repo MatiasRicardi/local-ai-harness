@@ -15,7 +15,6 @@ const error = ref<string | null>(null)
 const sending = ref(false)
 const stopped = ref(false)
 const attachedDocument = ref<AttachedDocument | null>(null)
-const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
 const abortController = ref<AbortController | null>(null)
 
@@ -164,7 +163,6 @@ async function handleSend(text: string) {
           <div ref="messagesEnd" />
           <DocumentAttachment
             :attached-document="attachedDocument"
-            :uploading="uploadingDocument"
             @attach="handleAttach"
             @remove="handleRemove"
             @error="handleUploadError"

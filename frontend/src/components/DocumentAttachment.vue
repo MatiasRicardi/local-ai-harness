@@ -5,7 +5,6 @@ import { uploadDocument, isSupportedExtension } from "../services/files"
 
 interface Props {
   attachedDocument: AttachedDocument | null
-  uploading: boolean
   onAttach: (doc: AttachedDocument) => void
   onRemove: () => void
   onError: (message: string) => void
@@ -14,17 +13,20 @@ interface Props {
 const props = defineProps<Props>()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const isUploading = ref(false)
 
 async function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file) return
+  if (!file || isUploading.value) return
 
   if (!isSupportedExtension(file.name)) {
     props.onError(`Unsupported file type. Allowed: .txt, .md, .pdf`)
     resetInput()
     return
   }
+
+  isUploading.value = true
 
   try {
     const doc = await uploadDocument(file)
@@ -33,6 +35,8 @@ async function handleFileChange(event: Event) {
   } catch (err) {
     props.onError(err instanceof Error ? err.message : "Upload failed.")
     resetInput()
+  } finally {
+    isUploading.value = false
   }
 }
 
@@ -63,50 +67,54 @@ function resetInput() {
       aria-label="Attach document"
     />
 
-    <button
-      v-if="!attachedDocument"
-      type="button"
-      class="document-attachment-btn"
-      :disabled="uploading"
-      @click="handleButtonClick"
-      aria-label="Attach document"
-    >
-      Attach document
-    </button>
-
-    <div v-else class="document-attachment-info">
-      <div class="document-attachment-meta">
-        <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
-        <span class="document-attachment-status">Ready</span>
-        <span class="document-attachment-details">
-          {{ attachedDocument.characterCount.toLocaleString() }} characters
-          <template v-if="attachedDocument.pageCount !== undefined">
-            · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
-          </template>
-        </span>
-      </div>
-
-      <div
-        v-if="attachedDocument.warnings.length > 0"
-        class="document-attachment-warnings"
-      >
-        <div
-          v-for="(warning, index) in attachedDocument.warnings"
-          :key="index"
-          class="document-attachment-warning"
-        >
-          Warning: {{ warning }}
+    <div class="document-attachment-info">
+      <template v-if="attachedDocument">
+        <div class="document-attachment-meta">
+          <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
+          <span class="document-attachment-status">Ready</span>
+          <span class="document-attachment-details">
+            {{ attachedDocument.characterCount.toLocaleString() }} characters
+            <template v-if="attachedDocument.pageCount !== undefined">
+              · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
+            </template>
+          </span>
         </div>
-      </div>
 
-      <button
-        type="button"
-        class="document-attachment-remove"
-        @click="handleRemove"
-        aria-label="Remove attached document"
-      >
-        Remove
-      </button>
+        <div
+          v-if="attachedDocument.warnings.length > 0"
+          class="document-attachment-warnings"
+        >
+          <div
+            v-for="(warning, index) in attachedDocument.warnings"
+            :key="index"
+            class="document-attachment-warning"
+          >
+            Warning: {{ warning }}
+          </div>
+        </div>
+      </template>
+
+      <div class="document-attachment-actions">
+        <button
+          type="button"
+          class="document-attachment-btn"
+          :disabled="isUploading"
+          @click="handleButtonClick"
+          :aria-label="attachedDocument ? 'Replace document' : 'Attach document'"
+        >
+          {{ attachedDocument ? "Replace" : "Attach document" }}
+        </button>
+        <button
+          v-if="attachedDocument"
+          type="button"
+          class="document-attachment-remove"
+          :disabled="isUploading"
+          @click="handleRemove"
+          aria-label="Remove attached document"
+        >
+          Remove
+        </button>
+      </div>
     </div>
   </div>
 </template>
