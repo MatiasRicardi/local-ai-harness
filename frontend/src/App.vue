@@ -146,7 +146,14 @@ async function handleSend(text: string) {
 
   try {
     const signal = abortController.value?.signal
-    await streamChat(allMessages, provider, callbacks, { signal })
+    const document = attachedDocument.value
+      ? {
+          fileId: attachedDocument.value.fileId,
+          filename: attachedDocument.value.originalFilename,
+          text: attachedDocument.value.text,
+        }
+      : undefined
+    await streamChat(allMessages, provider, callbacks, { signal, document })
   } catch (err) {
     // AbortError: onStopped or cleanup already handles state reset
     if (err instanceof DOMException && err.name === "AbortError") {
