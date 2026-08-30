@@ -61,16 +61,28 @@ export const chatMessagesSchema = z
 
 export type ChatMessages = z.infer<typeof chatMessagesSchema>;
 
+// ── Chat document context schema ─────────────────────────────────────────────
+
+/**
+ * Zod schema for the document context included in chat requests.
+ */
+export const chatDocumentContextSchema = z.object({
+  fileId: z.string(),
+  filename: z.string(),
+  text: z.string(),
+});
+
+export type ChatDocumentContext = z.infer<typeof chatDocumentContextSchema>;
+
 // ── Chat request schema ──────────────────────────────────────────────────────
 
 /**
  * Zod schema for the chat request body sent to the backend.
- * Note: Document/file context is not supported in this step and will be
- * added in a later step when file handling is implemented.
  */
 export const chatRequestSchema = z.object({
   provider: providerConfigSchema,
   messages: chatMessagesSchema,
-}).strict(); // Reject extra fields (e.g., document context not supported in step09)
+  document: chatDocumentContextSchema.optional(),
+});
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;

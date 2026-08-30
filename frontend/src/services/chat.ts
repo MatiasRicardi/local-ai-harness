@@ -3,6 +3,12 @@ export interface ChatMessage {
   content: string
 }
 
+export interface ChatDocumentContext {
+  fileId: string
+  filename: string
+  text: string
+}
+
 export interface ChatRequest {
   messages: ChatMessage[]
   provider: {
@@ -11,6 +17,7 @@ export interface ChatRequest {
     apiKey?: string
     timeoutMs: number
   }
+  document?: ChatDocumentContext
 }
 
 export interface ChatResponse {
@@ -51,7 +58,7 @@ export async function streamChat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,
   callbacks: StreamCallbacks,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; document?: ChatDocumentContext },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
 
@@ -59,10 +66,15 @@ export async function streamChat(
   let buffer = ""
 
   try {
+    const requestBody: Record<string, unknown> = { messages, provider }
+    if (options?.document) {
+      requestBody.document = options.document
+    }
+
     const response = await fetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, provider }),
+      body: JSON.stringify(requestBody),
       signal: options?.signal,
     })
 

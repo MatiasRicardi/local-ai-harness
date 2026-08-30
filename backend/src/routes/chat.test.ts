@@ -525,6 +525,157 @@ describe("chat endpoint", () => {
     expect(body.model).toBe("llama3-8b");
     expect(body.message.content).toBe("I'm a different model!");
   });
+
+  describe("document context integration", () => {
+    it("includes document context in request when document is provided", async () => {
+      app = buildApp();
+
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockResponse = {
+        ok: true,
+        json: async () => ({
+          id: "chat-123",
+          object: "chat.completion",
+          created: Date.now(),
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "Response" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      };
+
+      global.fetch = ((_: string, options: RequestInit) => {
+        capturedBody = JSON.parse(options.body as string) as Record<string, unknown>;
+        return mockResponse;
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            model: "test-model",
+          },
+          messages: [
+            {
+              role: "user",
+              content: "What is the main conclusion?",
+            },
+          ],
+          document: {
+            fileId: "uuid-123",
+            filename: "report.pdf",
+            text: "Quarterly Report: Revenue increased by 20%.",
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(capturedBody).not.toBeNull();
+
+      const body = capturedBody!;
+      const messages = body.messages as Array<{ role: string; content: string }>;
+
+      expect(messages.length).toBe(3);
+      // [0] = system policy (no document text)
+      expect(messages[0].role).toBe("system");
+      expect(messages[0].content).toContain("report.pdf");
+      expect(messages[0].content).toContain("untrusted reference material");
+      expect(messages[0].content).not.toContain("Quarterly Report");
+      // [1] = user message with document content
+      expect(messages[1].role).toBe("user");
+      expect(messages[1].content).toContain("Quarterly Report: Revenue increased by 20%");
+      expect(messages[1].content).toContain("<document>");
+      // [2] = actual user message
+      expect(messages[2].role).toBe("user");
+      expect(messages[2].content).toBe("What is the main conclusion?");
+    });
+
+    it("does not include document context when document is omitted", async () => {
+      app = buildApp();
+
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockResponse = {
+        ok: true,
+        json: async () => ({
+          id: "chat-123",
+          object: "chat.completion",
+          created: Date.now(),
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "Response" },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      };
+
+      global.fetch = ((_: string, options: RequestInit) => {
+        capturedBody = JSON.parse(options.body as string) as Record<string, unknown>;
+        return mockResponse;
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            model: "test-model",
+          },
+          messages: [
+            {
+              role: "user",
+              content: "Hello",
+            },
+          ],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(capturedBody).not.toBeNull();
+
+      const body = capturedBody!;
+      const messages = body.messages as Array<{ role: string; content: string }>;
+
+      expect(messages.length).toBe(1);
+      expect(messages[0].role).toBe("user");
+    });
+
+    it("rejects request with invalid document schema", async () => {
+      app = buildApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            model: "test-model",
+          },
+          messages: [
+            {
+              role: "user",
+              content: "Hello",
+            },
+          ],
+          document: "invalid",
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.success).toBe(false);
+      expect(body.error).toBe("Invalid request payload");
+    });
+  });
 });
 
 // ── Streaming endpoint tests ─────────────────────────────────────────────────

@@ -3,6 +3,10 @@ import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema } from "../provider/schemas.js";
 import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
+import {
+  buildDocumentContextMessage,
+  buildDocumentContentMessage,
+} from "../utils/documentContext.js";
 
 /**
  * Sanitize untrusted SSE data from providers.
@@ -31,8 +35,13 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    const { provider, messages } = result.data;
+    const { provider, messages, document } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
+
+    // Build the full message list with document context if present
+    const allMessages = document
+      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
+      : messages;
 
     try {
       // Forward messages through ProviderClient
@@ -43,7 +52,7 @@ const chat: FastifyPluginAsync = async (server) => {
           apiKey: provider.apiKey,
           timeoutMs: provider.timeoutMs,
         },
-        messages,
+        allMessages,
       );
 
       // Extract the assistant message from the response
@@ -105,8 +114,13 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    const { provider, messages } = result.data;
+    const { provider, messages, document } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
+
+    // Build the full message list with document context if present
+    const allMessages = document
+      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
+      : messages;
 
     // Create AbortController for client disconnect detection
     const abortController = new AbortController();
@@ -136,7 +150,7 @@ const chat: FastifyPluginAsync = async (server) => {
           apiKey: provider.apiKey,
           timeoutMs: provider.timeoutMs,
         },
-        messages,
+        allMessages,
         { signal: abortController.signal },
       );
 
