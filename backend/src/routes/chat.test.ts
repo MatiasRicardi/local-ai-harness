@@ -581,14 +581,19 @@ describe("chat endpoint", () => {
       const body = capturedBody!;
       const messages = body.messages as Array<{ role: string; content: string }>;
 
-      expect(messages.length).toBe(2);
+      expect(messages.length).toBe(3);
+      // [0] = system policy (no document text)
       expect(messages[0].role).toBe("system");
       expect(messages[0].content).toContain("report.pdf");
-      expect(messages[0].content).toContain("Quarterly Report: Revenue increased by 20%.");
-      expect(messages[0].content).toContain("<document>");
       expect(messages[0].content).toContain("untrusted reference material");
+      expect(messages[0].content).not.toContain("Quarterly Report");
+      // [1] = user message with document content
       expect(messages[1].role).toBe("user");
-      expect(messages[1].content).toBe("What is the main conclusion?");
+      expect(messages[1].content).toContain("Quarterly Report: Revenue increased by 20%");
+      expect(messages[1].content).toContain("<document>");
+      // [2] = actual user message
+      expect(messages[2].role).toBe("user");
+      expect(messages[2].content).toBe("What is the main conclusion?");
     });
 
     it("does not include document context when document is omitted", async () => {

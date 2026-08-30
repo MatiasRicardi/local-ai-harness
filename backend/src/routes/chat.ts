@@ -3,7 +3,10 @@ import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema } from "../provider/schemas.js";
 import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
-import { buildDocumentContextMessage } from "../utils/documentContext.js";
+import {
+  buildDocumentContextMessage,
+  buildDocumentContentMessage,
+} from "../utils/documentContext.js";
 
 /**
  * Sanitize untrusted SSE data from providers.
@@ -37,7 +40,7 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // Build the full message list with document context if present
     const allMessages = document
-      ? [buildDocumentContextMessage(document), ...messages]
+      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
       : messages;
 
     try {
@@ -116,7 +119,7 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // Build the full message list with document context if present
     const allMessages = document
-      ? [buildDocumentContextMessage(document), ...messages]
+      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
       : messages;
 
     // Create AbortController for client disconnect detection
