@@ -5,6 +5,7 @@ import { uploadDocument, isSupportedExtension } from "../services/files"
 
 interface Props {
   attachedDocument: AttachedDocument | null
+  uploading: boolean
   onAttach: (doc: AttachedDocument) => void
   onRemove: () => void
   onError: (message: string) => void
@@ -13,12 +14,11 @@ interface Props {
 const props = defineProps<Props>()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const isUploading = ref(false)
 
 async function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
-  if (!file || isUploading.value) return
+  if (!file || props.uploading) return
 
   if (!isSupportedExtension(file.name)) {
     props.onError(`Unsupported file type. Allowed: .txt, .md, .pdf`)
@@ -26,7 +26,7 @@ async function handleFileChange(event: Event) {
     return
   }
 
-  isUploading.value = true
+  emit("upload:start")
 
   try {
     const doc = await uploadDocument(file)
@@ -36,7 +36,7 @@ async function handleFileChange(event: Event) {
     props.onError(err instanceof Error ? err.message : "Upload failed.")
     resetInput()
   } finally {
-    isUploading.value = false
+    emit("upload:end")
   }
 }
 
@@ -54,6 +54,11 @@ function resetInput() {
     fileInputRef.value.value = ""
   }
 }
+
+const emit = defineEmits<{
+  "upload:start": []
+  "upload:end": []
+}>()
 </script>
 
 <template>
@@ -98,7 +103,7 @@ function resetInput() {
         <button
           type="button"
           class="document-attachment-btn"
-          :disabled="isUploading"
+          :disabled="uploading"
           @click="handleButtonClick"
           :aria-label="attachedDocument ? 'Replace document' : 'Attach document'"
         >
@@ -108,7 +113,7 @@ function resetInput() {
           v-if="attachedDocument"
           type="button"
           class="document-attachment-remove"
-          :disabled="isUploading"
+          :disabled="uploading"
           @click="handleRemove"
           aria-label="Remove attached document"
         >

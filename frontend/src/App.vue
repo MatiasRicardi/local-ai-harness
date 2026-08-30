@@ -15,6 +15,7 @@ const error = ref<string | null>(null)
 const sending = ref(false)
 const stopped = ref(false)
 const attachedDocument = ref<AttachedDocument | null>(null)
+const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
 const abortController = ref<AbortController | null>(null)
 
@@ -53,6 +54,14 @@ function handleRemove() {
 
 function handleUploadError(message: string) {
   error.value = message
+}
+
+function handleUploadStart() {
+  uploadingDocument.value = true
+}
+
+function handleUploadEnd() {
+  uploadingDocument.value = false
 }
 
 function generateId(): string {
@@ -163,9 +172,12 @@ async function handleSend(text: string) {
           <div ref="messagesEnd" />
           <DocumentAttachment
             :attached-document="attachedDocument"
+            :uploading="uploadingDocument"
             @attach="handleAttach"
             @remove="handleRemove"
             @error="handleUploadError"
+            @upload:start="handleUploadStart"
+            @upload:end="handleUploadEnd"
           />
           <ChatInput
             :on-send="handleSend"
