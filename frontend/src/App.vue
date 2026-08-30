@@ -4,14 +4,18 @@ import { streamChat, type ChatMessage, type ChatProviderConfig, type StreamCallb
 import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import ChatMessages from "./components/ChatMessages.vue"
+import DocumentAttachment from "./components/DocumentAttachment.vue"
 import ChatInput from "./components/ChatInput.vue"
 import type { Message } from "./types"
+import type { AttachedDocument } from "./services/files"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const sending = ref(false)
 const stopped = ref(false)
+const attachedDocument = ref<AttachedDocument | null>(null)
+const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
 const abortController = ref<AbortController | null>(null)
 
@@ -38,6 +42,26 @@ function handleStop() {
   if (lastMsg && lastMsg.role === "assistant") {
     lastMsg.stopped = true
   }
+}
+
+function handleAttach(doc: AttachedDocument) {
+  attachedDocument.value = doc
+}
+
+function handleRemove() {
+  attachedDocument.value = null
+}
+
+function handleUploadError(message: string) {
+  error.value = message
+}
+
+function handleUploadStart() {
+  uploadingDocument.value = true
+}
+
+function handleUploadEnd() {
+  uploadingDocument.value = false
 }
 
 function generateId(): string {
@@ -146,6 +170,15 @@ async function handleSend(text: string) {
         <div class="chat-inner">
           <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
           <div ref="messagesEnd" />
+          <DocumentAttachment
+            :attached-document="attachedDocument"
+            :uploading="uploadingDocument"
+            @attach="handleAttach"
+            @remove="handleRemove"
+            @error="handleUploadError"
+            @upload:start="handleUploadStart"
+            @upload:end="handleUploadEnd"
+          />
           <ChatInput
             :on-send="handleSend"
             :text-placeholder="'Type your message... (Enter to send)'"
