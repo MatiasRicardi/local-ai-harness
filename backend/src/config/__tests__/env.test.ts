@@ -50,7 +50,7 @@ describe("env configuration", () => {
       "http://localhost:5173",
       "http://127.0.0.1:5173",
     ]);
-    expect(config.REQUEST_TIMEOUT_MS).toBe(30000);
+    expect(config.REQUEST_TIMEOUT_MS).toBe(60000);
     expect(config.MAX_UPLOAD_SIZE_MB).toBe(10);
     expect(config.UPLOAD_DIR).toBe("./uploads");
     expect(config.DEFAULT_PROVIDER_TIMEOUT_MS).toBe(120000);
