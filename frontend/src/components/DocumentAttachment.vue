@@ -73,7 +73,10 @@ const emit = defineEmits<{
     />
 
     <div class="document-attachment-info">
-      <template v-if="attachedDocument">
+      <div v-if="uploading" class="document-attachment-uploading">
+        Uploading document...
+      </div>
+      <template v-else-if="attachedDocument">
         <div class="document-attachment-meta">
           <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
           <span class="document-attachment-status">Ready</span>
@@ -225,5 +228,19 @@ const emit = defineEmits<{
 .document-attachment-remove:hover {
   border-color: #ef4444;
   color: #ef4444;
+}
+
+.document-attachment-uploading {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 0.85rem;
+  color: var(--text);
+  opacity: 0.7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
 }
 </style>

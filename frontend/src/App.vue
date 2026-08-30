@@ -177,21 +177,23 @@ async function handleSend(text: string) {
         <div class="chat-inner">
           <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
           <div ref="messagesEnd" />
-          <DocumentAttachment
-            :attached-document="attachedDocument"
-            :uploading="uploadingDocument"
-            @attach="handleAttach"
-            @remove="handleRemove"
-            @error="handleUploadError"
-            @upload:start="handleUploadStart"
-            @upload:end="handleUploadEnd"
-          />
-          <ChatInput
-            :on-send="handleSend"
-            :text-placeholder="'Type your message... (Enter to send)'"
-            :sending="sending"
-            @stop="handleStop"
-          />
+          <div class="composer-container">
+            <DocumentAttachment
+              :attached-document="attachedDocument"
+              :uploading="uploadingDocument"
+              @attach="handleAttach"
+              @remove="handleRemove"
+              @error="handleUploadError"
+              @upload:start="handleUploadStart"
+              @upload:end="handleUploadEnd"
+            />
+            <ChatInput
+              :on-send="handleSend"
+              :sending="sending"
+              :has-document="!!attachedDocument"
+              @stop="handleStop"
+            />
+          </div>
         </div>
       </section>
     </main>
@@ -248,5 +250,13 @@ async function handleSend(text: string) {
   margin: 0 auto;
   padding: 0 16px;
   gap: 16px;
+}
+
+.composer-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: auto;
 }
 </style>
