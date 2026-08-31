@@ -73,31 +73,32 @@ const emit = defineEmits<{
     />
 
     <div class="document-attachment-info">
-      <template v-if="attachedDocument">
-        <div class="document-attachment-meta">
-          <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
-          <span class="document-attachment-status">Ready</span>
-          <span class="document-attachment-details">
-            {{ attachedDocument.characterCount.toLocaleString() }} characters
-            <template v-if="attachedDocument.pageCount !== undefined">
-              · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
-            </template>
-          </span>
-        </div>
+      <div v-if="uploading" class="document-attachment-uploading">
+        Uploading document...
+      </div>
+      <div v-if="attachedDocument" class="document-attachment-meta">
+        <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
+        <span class="document-attachment-status">Ready</span>
+        <span class="document-attachment-details">
+          {{ attachedDocument.characterCount.toLocaleString() }} characters
+          <template v-if="attachedDocument.pageCount !== undefined">
+            · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
+          </template>
+        </span>
+      </div>
 
+      <div
+        v-if="attachedDocument && attachedDocument.warnings.length > 0"
+        class="document-attachment-warnings"
+      >
         <div
-          v-if="attachedDocument.warnings.length > 0"
-          class="document-attachment-warnings"
+          v-for="(warning, index) in attachedDocument.warnings"
+          :key="index"
+          class="document-attachment-warning"
         >
-          <div
-            v-for="(warning, index) in attachedDocument.warnings"
-            :key="index"
-            class="document-attachment-warning"
-          >
-            Warning: {{ warning }}
-          </div>
+          Warning: {{ warning }}
         </div>
-      </template>
+      </div>
 
       <div class="document-attachment-actions">
         <button
@@ -225,5 +226,19 @@ const emit = defineEmits<{
 .document-attachment-remove:hover {
   border-color: #ef4444;
   color: #ef4444;
+}
+
+.document-attachment-uploading {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  font-size: 0.85rem;
+  color: var(--text);
+  opacity: 0.7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
 }
 </style>

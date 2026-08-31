@@ -1,13 +1,23 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, ref } from "vue"
 
 interface Props {
   onSend: (text: string) => void
   textPlaceholder?: string
   sending?: boolean
+  hasDocument?: boolean
 }
 
 const props = defineProps<Props>()
+
+const computedPlaceholder = computed(() => {
+  if (props.textPlaceholder !== undefined) {
+    return props.textPlaceholder
+  }
+  return props.hasDocument
+    ? "Ask a question about the attached document..."
+    : "Type your message..."
+})
 
 const emit = defineEmits<{
   stop: []
@@ -33,7 +43,7 @@ function handleEnter(event: KeyboardEvent) {
   <div class="chat-input">
     <textarea
       v-model="text"
-      :placeholder="textPlaceholder"
+      :placeholder="computedPlaceholder"
       :disabled="sending"
       @keydown.ctrl.enter="handleSend"
       @keydown.meta.enter="handleSend"
