@@ -9,6 +9,10 @@ export interface ChatDocumentContext {
   text: string
 }
 
+export interface ChatContext {
+  maxTokens: number
+}
+
 export interface ChatRequest {
   messages: ChatMessage[]
   provider: {
@@ -18,6 +22,7 @@ export interface ChatRequest {
     timeoutMs: number
   }
   document?: ChatDocumentContext
+  context?: ChatContext
 }
 
 export interface ChatResponse {
@@ -37,17 +42,26 @@ export interface ChatProviderConfig {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
+export interface ContextTruncationMetadata {
+  documentTruncated: boolean
+  originalDocumentCharacters: number
+  includedDocumentCharacters: number
+  estimatedOriginalDocumentTokens: number
+  estimatedIncludedDocumentTokens: number
+}
+
 export interface StreamEvent {
   type: "start" | "delta" | "done" | "error"
   data: {
     model?: string
     text?: string
     message?: string
+    context?: ContextTruncationMetadata
   }
 }
 
 export interface StreamCallbacks {
-  onStart: (model: string) => void
+  onStart: (model: string, context?: ContextTruncationMetadata) => void
   onDelta: (text: string) => void
   onDone: () => void
   onStopped: () => void
@@ -58,7 +72,11 @@ export async function streamChat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,
   callbacks: StreamCallbacks,
-  options?: { signal?: AbortSignal; document?: ChatDocumentContext },
+  options?: {
+    signal?: AbortSignal
+    document?: ChatDocumentContext
+    context?: ChatContext
+  },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
 
@@ -69,6 +87,9 @@ export async function streamChat(
     const requestBody: Record<string, unknown> = { messages, provider }
     if (options?.document) {
       requestBody.document = options.document
+    }
+    if (options?.context) {
+      requestBody.context = options.context
     }
 
     const response = await fetch(apiUrl, {
@@ -158,11 +179,12 @@ function dispatchEvent(
       model?: string
       text?: string
       message?: string
+      context?: ContextTruncationMetadata
     }
 
     switch (event.type) {
       case "start":
-        callbacks.onStart(parsed.model ?? "")
+        callbacks.onStart(parsed.model ?? "", parsed.context)
         break
       case "delta":
         if (parsed.text !== undefined) {

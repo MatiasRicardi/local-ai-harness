@@ -18,6 +18,7 @@ const attachedDocument = ref<AttachedDocument | null>(null)
 const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
 const abortController = ref<AbortController | null>(null)
+const documentContextWarning = ref<string | null>(null)
 
 const providerSettings = useProviderSettings()
 
@@ -106,7 +107,7 @@ async function handleSend(text: string) {
   }
 
   const callbacks: StreamCallbacks = {
-    onStart: () => {
+    onStart: (_model, context) => {
       // Insert empty assistant message when generation starts
       assistantMessageId = generateId()
       messages.value.push({
@@ -114,6 +115,16 @@ async function handleSend(text: string) {
         role: "assistant",
         content: "",
       })
+
+      // Show warning if document was truncated
+      if (context?.documentTruncated) {
+        const originalMB = (context.originalDocumentCharacters / 1024).toFixed(1)
+        const includedMB = (context.includedDocumentCharacters / 1024).toFixed(1)
+        documentContextWarning.value = `Document was truncated: ${includedMB}KB of ${originalMB}KB included due to context limit.`
+      } else {
+        documentContextWarning.value = null
+      }
+
       scrollToBottom("auto")
     },
     onDelta: (text: string) => {
@@ -128,16 +139,19 @@ async function handleSend(text: string) {
     },
     onDone: () => {
       assistantMessageId = null
+      documentContextWarning.value = null
       cleanup()
       scrollToBottom("smooth")
     },
     onStopped: () => {
       assistantMessageId = null
+      documentContextWarning.value = null
       cleanup()
       scrollToBottom("auto")
     },
     onError: (message: string) => {
       assistantMessageId = null
+      documentContextWarning.value = null
       error.value = message
       cleanup()
       scrollToBottom("auto")
@@ -153,7 +167,10 @@ async function handleSend(text: string) {
           text: attachedDocument.value.text,
         }
       : undefined
-    await streamChat(allMessages, provider, callbacks, { signal, document })
+    const context = {
+      maxTokens: providerSettings.value.contextSizeTokens,
+    }
+    await streamChat(allMessages, provider, callbacks, { signal, document, context })
   } catch (err) {
     // AbortError: onStopped or cleanup already handles state reset
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -176,6 +193,10 @@ async function handleSend(text: string) {
       <section class="chat-panel">
         <div class="chat-inner">
           <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
+          <div v-if="documentContextWarning" class="document-context-warning">
+            <span class="warning-icon">⚠️</span>
+            {{ documentContextWarning }}
+          </div>
           <div ref="messagesEnd" />
           <div class="composer-container">
             <DocumentAttachment
@@ -258,5 +279,21 @@ async function handleSend(text: string) {
   gap: 8px;
   padding-top: 12px;
   margin-top: auto;
+}
+
+.document-context-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.warning-icon {
+  font-size: 16px;
 }
 </style>

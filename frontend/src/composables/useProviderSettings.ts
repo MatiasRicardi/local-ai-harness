@@ -6,6 +6,7 @@ interface ProviderSettings {
   name: string
   baseUrl: string
   model: string
+  contextSizeTokens: number
   apiKey: string
   timeout: number
 }
@@ -14,6 +15,7 @@ const defaults: ProviderSettings = {
   name: "llama.cpp",
   baseUrl: "http://localhost:8080/v1",
   model: "local-model",
+  contextSizeTokens: 32768,
   apiKey: "",
   timeout: 120,
 }
@@ -39,6 +41,7 @@ function mergeWithDefaults(saved: Partial<ProviderSettings>): ProviderSettings {
     name: saved.name ?? defaults.name,
     baseUrl: saved.baseUrl ?? defaults.baseUrl,
     model: saved.model ?? defaults.model,
+    contextSizeTokens: saved.contextSizeTokens ?? defaults.contextSizeTokens,
     apiKey: saved.apiKey ?? defaults.apiKey,
     timeout: saved.timeout ?? defaults.timeout,
   }

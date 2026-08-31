@@ -9,6 +9,7 @@ const state = ref({
   name: settings.value.name,
   baseUrl: settings.value.baseUrl,
   model: settings.value.model,
+  contextSizeTokens: settings.value.contextSizeTokens,
   apiKey: settings.value.apiKey,
   timeout: settings.value.timeout,
   status: "" as
@@ -29,6 +30,7 @@ const doSync = () => {
       name: state.value.name,
       baseUrl: state.value.baseUrl,
       model: state.value.model,
+      contextSizeTokens: state.value.contextSizeTokens,
       apiKey: state.value.apiKey,
       timeout: state.value.timeout,
     })
@@ -44,7 +46,14 @@ onUnmounted(() => {
 
 // Watch for changes and sync with debounce
 watch(
-  () => [state.value.name, state.value.baseUrl, state.value.model, state.value.apiKey, state.value.timeout],
+  () => [
+    state.value.name,
+    state.value.baseUrl,
+    state.value.model,
+    state.value.contextSizeTokens,
+    state.value.apiKey,
+    state.value.timeout,
+  ],
   doSync,
   { immediate: false }
 )
@@ -116,6 +125,19 @@ const handleTest = async () => {
           type="text"
           placeholder="local-model"
         />
+      </div>
+
+      <div class="form-group">
+        <label for="context-size">Context Size (tokens)</label>
+        <input
+          id="context-size"
+          v-model.number="state.contextSizeTokens"
+          type="number"
+          min="1024"
+          max="2000000"
+          step="1024"
+        />
+        <small class="helper">Approximate maximum context window supported by the configured model.</small>
       </div>
 
       <div class="form-group">
@@ -218,6 +240,12 @@ const handleTest = async () => {
 .form-group small {
   color: #e67e22;
   font-size: 0.75rem;
+}
+
+.form-group .helper {
+  color: #666;
+  font-size: 0.75rem;
+  font-weight: normal;
 }
 
 .form-actions {
