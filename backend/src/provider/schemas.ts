@@ -74,6 +74,21 @@ export const chatDocumentContextSchema = z.object({
 
 export type ChatDocumentContext = z.infer<typeof chatDocumentContextSchema>;
 
+// ── Chat context schema ──────────────────────────────────────────────────────
+
+/**
+ * Zod schema for the context configuration included in chat requests.
+ */
+export const chatContextSchema = z.object({
+  maxTokens: z
+    .number()
+    .int()
+    .min(1024, "Context size must be at least 1024 tokens")
+    .max(2_000_000, "Context size must not exceed 2,000,000 tokens"),
+});
+
+export type ChatContext = z.infer<typeof chatContextSchema>;
+
 // ── Chat request schema ──────────────────────────────────────────────────────
 
 /**
@@ -83,6 +98,7 @@ export const chatRequestSchema = z.object({
   provider: providerConfigSchema,
   messages: chatMessagesSchema,
   document: chatDocumentContextSchema.optional(),
+  context: chatContextSchema.optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;

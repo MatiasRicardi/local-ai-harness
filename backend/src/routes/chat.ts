@@ -1,12 +1,16 @@
 import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
-import { chatRequestSchema } from "../provider/schemas.js";
+import { chatRequestSchema, type ChatMessage } from "../provider/schemas.js";
 import { mapErrorToReply } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
 import {
   buildDocumentContextMessage,
   buildDocumentContentMessage,
 } from "../utils/documentContext.js";
+import {
+  calculateContextBudget,
+  type ContextTruncationMetadata,
+} from "../context/context-budget.js";
 
 /**
  * Sanitize untrusted SSE data from providers.
@@ -16,6 +20,26 @@ import {
  */
 function sanitizeSseData(text: string): string {
   return text.replace(/\u0000/g, "")
+}
+
+/**
+ * Build the message list with document context if present.
+ *
+ * The document text passed here should already be truncated (if needed)
+ * by the context budget calculation.
+ */
+function buildAllMessages(
+  document: { fileId: string; filename: string; text: string } | undefined,
+  messages: ChatMessage[],
+): ChatMessage[] {
+  if (!document) {
+    return messages;
+  }
+  return [
+    buildDocumentContextMessage(document),
+    buildDocumentContentMessage(document),
+    ...messages,
+  ];
 }
 
 /**
@@ -35,13 +59,36 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    const { provider, messages, document } = result.data;
+    const { provider, messages, document, context } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
-    // Build the full message list with document context if present
-    const allMessages = document
-      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
-      : messages;
+    // Determine context size (default 32768 if not provided)
+    const contextSizeTokens = context?.maxTokens ?? 32768;
+
+    // Calculate context budget before contacting provider
+    const budgetResult = calculateContextBudget({
+      contextSizeTokens,
+      systemInstructions: "",
+      conversationHistory: messages.slice(0, -1),
+      currentUserMessage: messages[messages.length - 1].content,
+      documentText: document?.text ?? null,
+      documentFilename: document?.filename ?? null,
+      hasDocument: !!document,
+    });
+
+    // If budget calculation says the request is invalid, reject before provider contact
+    if (!budgetResult.valid) {
+      return reply.code(400).send({
+        success: false,
+        error: budgetResult.errorMessage,
+      });
+    }
+
+    // Build the full message list with (possibly truncated) document context
+    const documentForMessages = document
+      ? { ...document, text: budgetResult.includedDocumentText }
+      : undefined;
+    const allMessages = buildAllMessages(documentForMessages, messages);
 
     try {
       // Forward messages through ProviderClient
@@ -114,13 +161,36 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    const { provider, messages, document } = result.data;
+    const { provider, messages, document, context } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
-    // Build the full message list with document context if present
-    const allMessages = document
-      ? [buildDocumentContextMessage(document), buildDocumentContentMessage(document), ...messages]
-      : messages;
+    // Determine context size (default 32768 if not provided)
+    const contextSizeTokens = context?.maxTokens ?? 32768;
+
+    // Calculate context budget before contacting provider
+    const budgetResult = calculateContextBudget({
+      contextSizeTokens,
+      systemInstructions: "",
+      conversationHistory: messages.slice(0, -1),
+      currentUserMessage: messages[messages.length - 1].content,
+      documentText: document?.text ?? null,
+      documentFilename: document?.filename ?? null,
+      hasDocument: !!document,
+    });
+
+    // If budget calculation says the request is invalid, reject before provider contact
+    if (!budgetResult.valid) {
+      return reply.code(400).send({
+        success: false,
+        error: budgetResult.errorMessage,
+      });
+    }
+
+    // Build the full message list with (possibly truncated) document context
+    const documentForMessages = document
+      ? { ...document, text: budgetResult.includedDocumentText }
+      : undefined;
+    const allMessages = buildAllMessages(documentForMessages, messages);
 
     // Create AbortController for client disconnect detection
     const abortController = new AbortController();
@@ -135,10 +205,18 @@ const chat: FastifyPluginAsync = async (server) => {
       }
     });
 
+    // Build start event data (include context metadata only when truncation occurred)
+    const startEventData: { model: string; context?: ContextTruncationMetadata } = {
+      model: provider.model,
+    };
+    if (budgetResult.truncationMetadata.documentTruncated) {
+      startEventData.context = budgetResult.truncationMetadata;
+    }
+
     // Write start event
     await reply.sse.send({
       event: "start",
-      data: { model: provider.model },
+      data: startEventData,
     });
 
     try {
