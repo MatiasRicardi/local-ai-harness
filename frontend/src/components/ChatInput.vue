@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 
 interface Props {
   onSend: (text: string) => void
   textPlaceholder?: string
   sending?: boolean
   hasDocument?: boolean
+  resetKey?: number
 }
 
 const props = defineProps<Props>()
@@ -23,6 +24,14 @@ const emit = defineEmits<{
   stop: []
 }>()
 const text = ref("")
+
+// Clear the local draft when the parent requests a conversation reset.
+watch(
+  () => props.resetKey,
+  () => {
+    text.value = ""
+  },
+)
 
 function handleSend() {
   if (text.value.trim()) {
