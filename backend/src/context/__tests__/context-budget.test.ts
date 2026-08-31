@@ -200,14 +200,39 @@ describe("truncateDocumentToBudget", () => {
   });
 
   it("does not leave isolated surrogates", () => {
-    // Create a string that has a high surrogate in the middle
+    // Prefix budget = 48 - 42 (marker) = 6 code units, so the prefix ends on
+    // the high surrogate at index 5 and must be trimmed back.
     const highSurrogate = String.fromCharCode(0xd800);
-    const text = "Hello" + highSurrogate + " world";
-    const result = truncateDocumentToBudget(text, 20);
+    const text = "Hello" + highSurrogate + "x".repeat(60);
+    const result = truncateDocumentToBudget(text, 48);
+    expect(result.length).toBeLessThan(text.length);
     // The last character should not be a surrogate (high or low)
     const lastChar = result.charCodeAt(result.length - 1);
     const isSurrogate = lastChar >= 0xd800 && lastChar <= 0xdfff;
     expect(isSurrogate).toBe(false);
+    // Assert on the text before the marker to test the guard directly
+    const marker = "[Document truncated due to context limit.]";
+    const textBeforeMarker = result.slice(0, result.length - marker.length);
+    if (textBeforeMarker.length > 0) {
+      const lastTextChar = textBeforeMarker.charCodeAt(textBeforeMarker.length - 1);
+      const isTextSurrogate = lastTextChar >= 0xd800 && lastTextChar <= 0xdfff;
+      expect(isTextSurrogate).toBe(false);
+    }
+  });
+
+  it("does not drop all content when breakIndex is 0", () => {
+    // Document starts with \n, so lastIndexOf("\n") returns 0.
+    // The guard must require breakIndex > 0 to preserve content.
+    const text = "\nHello world, this is content that should be preserved.";
+    // Large enough budget to avoid truncation entirely
+    const result = truncateDocumentToBudget(text, 200);
+    expect(result).toBe(text);
+
+    // With a tight budget the \n at index 0 would be a break candidate,
+    // but the > 0 guard must still preserve some content (not just the marker).
+    const tightResult = truncateDocumentToBudget(text, 50);
+    expect(tightResult).not.toBe("[Document truncated due to context limit.]");
+    expect(tightResult).toContain("Hello");
   });
 });
 

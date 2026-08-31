@@ -118,9 +118,9 @@ async function handleSend(text: string) {
 
       // Show warning if document was truncated
       if (context?.documentTruncated) {
-        const originalMB = (context.originalDocumentCharacters / 1024).toFixed(1)
-        const includedMB = (context.includedDocumentCharacters / 1024).toFixed(1)
-        documentContextWarning.value = `Document was truncated: ${includedMB}KB of ${originalMB}KB included due to context limit.`
+        const originalChars = context.originalDocumentCharacters.toLocaleString()
+        const includedChars = context.includedDocumentCharacters.toLocaleString()
+        documentContextWarning.value = `Document was truncated: ${includedChars} characters of ${originalChars} included due to context limit.`
       } else {
         documentContextWarning.value = null
       }

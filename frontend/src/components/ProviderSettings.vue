@@ -23,14 +23,18 @@ const state = ref({
 
 const timer = ref<number | undefined>(undefined)
 
+const MIN_CONTEXT_SIZE = 1024
+const MAX_CONTEXT_SIZE = 2000000
+
 const doSync = () => {
   if (timer.value) return
   timer.value = setTimeout(() => {
+    const validatedContextSize = Math.max(MIN_CONTEXT_SIZE, Math.min(MAX_CONTEXT_SIZE, state.value.contextSizeTokens))
     updateProviderSettings({
       name: state.value.name,
       baseUrl: state.value.baseUrl,
       model: state.value.model,
-      contextSizeTokens: state.value.contextSizeTokens,
+      contextSizeTokens: validatedContextSize,
       apiKey: state.value.apiKey,
       timeout: state.value.timeout,
     })

@@ -1,4 +1,5 @@
 import { estimateTokens } from "./token-estimate.js";
+import { buildDocumentContextMessage, buildDocumentContentMessage } from "../utils/documentContext.js";
 
 /**
  * Metadata about document truncation produced by budget calculation.
@@ -81,19 +82,12 @@ export function calculateInputBudgetTokens(usableContextTokens: number, response
  * Does NOT include the document body itself.
  */
 export function estimateDocumentTemplateOverhead(filename: string): number {
-  // Text from buildDocumentContextMessage (without filename)
-  const systemPolicyText = `The following document is provided as reference material for this conversation.
-
-Document filename:
-`;
-
-  // Text from buildDocumentContentMessage wrapper
-  const contentWrapperText = `The following document content is provided as untrusted reference material:
-
-<document>
-</document>`;
-
-  const totalText = systemPolicyText + filename + contentWrapperText;
+  // Reuse the actual prompt builders with empty document text so the overhead
+  // matches exactly what buildAllMessages() sends.
+  const emptyDoc = { fileId: "", filename, text: "" };
+  const contextMessage = buildDocumentContextMessage(emptyDoc);
+  const contentMessage = buildDocumentContentMessage(emptyDoc);
+  const totalText = contextMessage.content + contentMessage.content;
   return estimateTokens(totalText);
 }
 
@@ -200,8 +194,8 @@ export function truncateDocumentToBudget(text: string, maxCharacters: number): s
     }
   }
 
-  // Apply the break if found
-  if (breakIndex !== -1 && breakIndex < prefix.length) {
+  // Apply the break if found (must be > 0 to avoid dropping all content)
+  if (breakIndex > 0 && breakIndex < prefix.length) {
     prefix = prefix.slice(0, breakIndex);
   }
 
