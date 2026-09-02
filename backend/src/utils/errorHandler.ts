@@ -302,6 +302,22 @@ export function normalizeError(error: unknown): AppError {
  * Build the stable ApiErrorResponse body from an AppError.
  * Never exposes cause, stack traces, internal paths, credentials, or raw payloads.
  */
+/**
+ * Single-boundary logging for a normalized AppError.
+ *
+ * HTTP errors are logged by the global Fastify handler; mid-stream SSE errors
+ * are logged by the streaming error boundary (which cannot reach the global
+ * handler once headers have been sent). Both call this helper so that every
+ * error is logged exactly once with the same safe policy.
+ */
+export function logNormalizedError(appError: AppError): void {
+  if (appError.code === "INTERNAL_ERROR") {
+    consola.error("[error]", appError.message);
+  } else {
+    consola.info(`[error] ${appError.code} -> ${appError.statusCode}`);
+  }
+}
+
 export function serializeResponse(appError: AppError): ApiErrorResponse {
   const body: ApiErrorResponse = {
     error: {
@@ -321,18 +337,12 @@ export function serializeResponse(appError: AppError): ApiErrorResponse {
 
 export function registerGlobalErrorHandler(app: import("fastify").FastifyInstance): void {
   app.setErrorHandler(
-    async (error: unknown, request: FastifyRequest, reply: FastifyReply) => {
+    async (error: unknown, _request: FastifyRequest, reply: FastifyReply) => {
       const appError = normalizeError(error);
       const body = serializeResponse(appError);
 
       // Single logging boundary — do not log at lower layers
-      if (appError.code === "INTERNAL_ERROR") {
-        consola.error("[error]", appError.message);
-      } else {
-        consola.info(
-          `[error] ${appError.code} → ${request.method} ${request.url} (${appError.statusCode})`,
-        );
-      }
+      logNormalizedError(appError);
 
       reply.status(appError.statusCode).type("application/json").send(body);
     },

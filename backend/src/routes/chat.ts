@@ -1,7 +1,11 @@
 import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema, type ChatMessage } from "../provider/schemas.js";
-import { normalizeError, AppError } from "../utils/errorHandler.js";
+import {
+  normalizeError,
+  logNormalizedError,
+  AppError,
+} from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
 import {
   buildDocumentContextMessage,
@@ -299,11 +303,23 @@ const chat: FastifyPluginAsync = async (server) => {
         }
       }
 
-      // Provider error → send as SSE error event
+      // Provider error → send as SSE error event with the stable code.
+      // This streaming boundary is the effective application boundary for this
+      // error (it can never reach the global Fastify handler once headers have
+      // been sent), so it is logged exactly once here.
       const appError = normalizeError(error);
+      logNormalizedError(appError);
+
+      const eventData: { code: AppError["code"]; message: string; detail?: string } = {
+        code: appError.code,
+        message: appError.userMessage,
+      };
+      if (appError.detail) {
+        eventData.detail = appError.detail;
+      }
       await reply.sse.send({
         event: "error",
-        data: { message: appError.userMessage },
+        data: eventData,
       });
     }
   });
