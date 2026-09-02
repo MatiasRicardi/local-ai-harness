@@ -131,12 +131,14 @@ const filesRoute: FastifyPluginAsync = async (server) => {
             if (destinationPath) {
               try {
                 await removeTempFileSafely(destinationPath);
+                // Clear only after a successful removal so a failed cleanup
+                // keeps the path for the outer catch to retry removal.
+                destinationPath = undefined;
               } catch {
                 // Report cleanup failure without masking the rejection being
                 // returned below. Never logs the path or file contents.
                 reportCleanupFailure();
               }
-              destinationPath = undefined;
               responsePayload = undefined;
             }
 

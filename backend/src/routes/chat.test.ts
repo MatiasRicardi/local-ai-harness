@@ -989,25 +989,19 @@ describe("chat/stream endpoint", () => {
       }
       expect(url).toContain("/chat/completions");
       upstreamSignal = (options.signal as AbortSignal | undefined) ?? undefined;
-      return {
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        body: mockStream,
-        headers: new Headers({
-          "content-type": "text/event-stream",
-        }),
-      };
-    }) as unknown as typeof globalThis.fetch;
-
-    const mockStream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const encoder = new TextEncoder();
-        controller.enqueue(
-          encoder.encode('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'),
+      // Stay pending until the client disconnect aborts this request, so the
+      // provider never sends headers before cancellation (pre-header path).
+      return new Promise<Response>((_resolve, reject) => {
+        (options.signal as AbortSignal | undefined)?.addEventListener(
+          "abort",
+          () => {
+            reject(
+              new DOMException("The operation was aborted.", "AbortError"),
+            );
+          },
         );
-      },
-    });
+      });
+    }) as unknown as typeof globalThis.fetch;
 
     await app.listen({ port: 0, host: "127.0.0.1" });
     const { port } = (app.addresses?.()?.[0] ?? { port: 0 }) as { port: number };
@@ -1023,16 +1017,30 @@ describe("chat/stream endpoint", () => {
       signal: controller.signal,
     });
 
-    // Wait until the client has received the first delta, then disconnect.
+    // Read the SSE stream until the route emits its start event. The provider
+    // fetch stays pending (never sends headers), so start is the first event.
     const reader = res.body!.getReader();
-    await reader.read();
-    expect(upstreamSignal).toBeDefined();
+    const decoder = new TextDecoder();
+    let sawStart = false;
+    while (!sawStart) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (decoder.decode(value, { stream: true }).includes("event: start")) {
+        sawStart = true;
+      }
+    }
+    expect(sawStart).toBe(true);
+
+    // Ensure the pending provider fetch has been registered.
+    while (!upstreamSignal) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(upstreamSignal!.aborted).toBe(false);
 
-    // Give the server a moment to forward the first chunk before aborting.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    // Client disconnects before the upstream response completes.
+    // Disconnect the client after the start event, while the provider request
+    // is still pending (before provider headers are received).
     try {
       controller.abort();
       await reader.cancel();

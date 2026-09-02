@@ -525,6 +525,58 @@ describe("file upload endpoint", () => {
     expect(filesAfter).toHaveLength(0);
   });
 
+  it("multi-file upload: outer cleanup removes the file when the first rm fails", async () => {
+    app = buildApp();
+
+    const rmMock = vi.mocked(rm);
+    // Reset the call log (the mock is module-level and accumulates across tests).
+    rmMock.mockClear();
+    // The first rm (multi-file branch) fails; the second rm (outer catch) must
+    // still remove the uploaded file so no residue is left behind.
+    rmMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    // Build a multipart body with TWO file parts
+    const header1 = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="file1.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+    const content1 = "first file content";
+    const header2 = `\r\n--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="file2.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+    const content2 = "second file content";
+    const footer = `\r\n--${BOUNDARY}--\r\n`;
+
+    const body = Buffer.concat([
+      Buffer.from(header1, "utf-8"),
+      Buffer.from(content1, "utf-8"),
+      Buffer.from(header2, "utf-8"),
+      Buffer.from(content2, "utf-8"),
+      Buffer.from(footer, "utf-8"),
+    ]);
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/files",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+          "Content-Length": String(body.length),
+        },
+        payload: body,
+      });
+
+      expect(response.statusCode).toBe(400);
+      const json = JSON.parse(response.body);
+      expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+
+      // The multi-file branch rm failed (mockRejectedValueOnce above), but the
+      // outer cleanup retried and removed the file in the same request.
+      expect(rmMock).toHaveBeenCalledTimes(2);
+
+      // No residue left behind despite the transient first failure.
+      const filesAfter = await readdir(testUploadDir);
+      expect(filesAfter).toHaveLength(0);
+    } finally {
+      rmMock.mockRestore();
+    }
+  });
+
   it("duplicate original filenames do not collide", async () => {
     app = buildApp();
 
