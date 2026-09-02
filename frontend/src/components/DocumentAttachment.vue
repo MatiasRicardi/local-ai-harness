@@ -2,13 +2,14 @@
 import { ref, watch } from "vue"
 import type { AttachedDocument } from "../services/files"
 import { uploadDocument, isSupportedExtension } from "../services/files"
+import { FrontendApiError } from "../types/error"
 
 interface Props {
   attachedDocument: AttachedDocument | null
   uploading: boolean
   onAttach: (doc: AttachedDocument) => void
   onRemove: () => void
-  onError: (message: string) => void
+  onError: (error: FrontendApiError) => void
   resetVersion?: number
 }
 
@@ -25,8 +26,17 @@ async function handleFileChange(event: Event) {
   const file = input.files?.[0]
   if (!file || props.uploading) return
 
+  // A new attempt clears any previous attachment error at the App level.
+  emit("attempt")
+
   if (!isSupportedExtension(file.name)) {
-    props.onError(`Unsupported file type. Allowed: .txt, .md, .pdf`)
+    // Client-side fast rejection (backend keeps its own authoritative check).
+    props.onError(
+      new FrontendApiError({
+        code: "UNSUPPORTED_FILE",
+        message: "Unsupported file type. Allowed: .txt, .md, .pdf",
+      }),
+    )
     resetInput()
     return
   }
@@ -44,7 +54,14 @@ async function handleFileChange(event: Event) {
     resetInput()
   } catch (err) {
     if (currentGeneration !== uploadGeneration) return
-    props.onError(err instanceof Error ? err.message : "Upload failed.")
+    props.onError(
+      err instanceof FrontendApiError
+        ? err
+        : new FrontendApiError({
+            code: "FILE_UPLOAD_ERROR",
+            message: "The file could not be uploaded.",
+          }),
+    )
     resetInput()
   } finally {
     if (currentGeneration === uploadGeneration) {
@@ -80,6 +97,7 @@ function resetInput() {
 const emit = defineEmits<{
   "upload:start": []
   "upload:end": []
+  "attempt": []
 }>()
 </script>
 

@@ -1,3 +1,5 @@
+import { parseApiError } from "../utils/parseApiError"
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
 export interface ProviderTestRequest {
@@ -25,8 +27,10 @@ export async function testProviderConnection(
   })
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }))
-    return { success: false, error: error.error || "Failed to test connection" }
+    // Normalize the shared backend contract into a FrontendApiError.
+    // Provider Settings keeps its own local status/message UI and reads
+    // `error.message` from the caught error.
+    throw await parseApiError(response)
   }
 
   return response.json()

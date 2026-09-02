@@ -1,3 +1,5 @@
+import { parseApiError } from "../utils/parseApiError"
+
 export interface AttachedDocument {
   fileId: string
   originalFilename: string
@@ -23,11 +25,6 @@ export interface FileUploadResponse {
   }
 }
 
-export interface FileUploadError {
-  success: false
-  error: string
-}
-
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000"
 
 export function isSupportedExtension(filename: string): boolean {
@@ -47,9 +44,8 @@ export async function uploadDocument(
   })
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    const message = (body as { error?: string }).error ?? "Upload failed."
-    throw new Error(message)
+    // Normalize the shared backend contract instead of throwing a raw string.
+    throw await parseApiError(response)
   }
 
   const data = (await response.json()) as FileUploadResponse

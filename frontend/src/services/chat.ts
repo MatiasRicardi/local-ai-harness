@@ -1,3 +1,6 @@
+import type { FrontendApiError } from "../types/error"
+import { parseApiError, parseStreamErrorData, toNetworkError, toUnknownError } from "../utils/parseApiError"
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant"
   content: string
@@ -30,7 +33,7 @@ export interface ChatResponse {
   message?: ChatMessage
   model?: string
   finishReason?: string | null
-  error?: string
+  error?: FrontendApiError
 }
 
 export interface ChatProviderConfig {
@@ -56,6 +59,9 @@ export interface StreamEvent {
     model?: string
     text?: string
     message?: string
+    // Stable backend error code (Step 21.2), present on `error` events.
+    code?: string
+    detail?: string
     context?: ContextTruncationMetadata
   }
 }
@@ -65,7 +71,9 @@ export interface StreamCallbacks {
   onDelta: (text: string) => void
   onDone: () => void
   onStopped: () => void
-  onError: (message: string) => void
+  // The service layer owns parsing/normalization; consumers only decide where
+  // to display an already-normalized error.
+  onError: (error: FrontendApiError) => void
 }
 
 export async function streamChat(
@@ -100,13 +108,15 @@ export async function streamChat(
     })
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Unknown error" }))
-      callbacks.onError(error.error || "Failed to send message")
+      // HTTP error received before the stream started (e.g. validation,
+      // context budget, provider failure). Normalize the shared contract.
+      callbacks.onError(await parseApiError(response))
       return
     }
 
     if (!response.body) {
-      callbacks.onError("Empty response body")
+      // Response was OK but carried no stream; treat as an unknown failure.
+      callbacks.onError(toUnknownError())
       return
     }
 
@@ -158,13 +168,16 @@ export async function streamChat(
     }
   } catch (err) {
     if (options?.signal?.aborted || err instanceof DOMException && err.name === "AbortError") {
+      // User cancellation (Stop / New conversation): silent, never an error.
       // Clean up buffer on abort
       buffer = ""
       callbacks.onStopped()
       return
     }
 
-    callbacks.onError(err instanceof Error ? err.message : "Stream read error")
+    // A fetch/stream failure before receiving a normalized HTTP/SSE response is
+    // a client-side network failure, not a provider error.
+    callbacks.onError(toNetworkError())
   } finally {
     reader?.releaseLock()
   }
@@ -196,9 +209,11 @@ function dispatchEvent(
       case "done":
         callbacks.onDone()
         break
-      case "error":
-        callbacks.onError(parsed.message ?? "Unknown error")
+      case "error": {
+        // Mid-stream provider error carrying the stable backend code.
+        callbacks.onError(parseStreamErrorData(parsed))
         break
+      }
     }
   } catch {
     // Malformed JSON — log and skip without crashing
@@ -218,8 +233,8 @@ export async function chat(
   })
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }))
-    return { success: false, error: error.error || "Failed to send message" }
+    // Normalize non-streaming HTTP errors through the shared parser.
+    return { success: false, error: await parseApiError(response) }
   }
 
   return response.json()
