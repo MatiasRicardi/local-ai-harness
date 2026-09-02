@@ -1,6 +1,16 @@
 import type { ProviderClient, ChatResponse, ProviderStream, ProviderError } from "./types.js";
 import { type ProviderConfig, type ChatMessages, type ChatMessage } from "./schemas.js";
 
+export class ProviderClientError extends Error {
+  readonly errorType: string;
+
+  constructor(errorType: string, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProviderClientError";
+    this.errorType = errorType;
+  }
+}
+
 /**
  * Combine two AbortSignals so that aborting either one aborts the combined signal.
  * Falls back to a simple implementation when AbortSignal.any() is unavailable.
@@ -75,6 +85,7 @@ export class OpenAICompatibleClient implements ProviderClient {
     HTTP_ERROR: "http_error",
     MALFORMED_RESPONSE: "malformed_response",
     NETWORK_ERROR: "network_error",
+    USER_ABORT: "user_abort",
     UNKNOWN: "unknown",
   };
 
@@ -83,11 +94,16 @@ export class OpenAICompatibleClient implements ProviderClient {
    * Uses structured error type detection instead of fragile string matching.
    */
   getErrorInfo(error: unknown): ProviderError {
-    // Check for timeout errors (DOMException with name "TimeoutError" or AbortError)
-    if (
-      error instanceof DOMException &&
-      (error.name === "TimeoutError" || error.name === "AbortError")
-    ) {
+    // User-initiated abort (AbortController.abort()) — not a provider error.
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return {
+        errorType: OpenAICompatibleClient.ErrorType.USER_ABORT,
+        message: "Request was cancelled",
+      };
+    }
+
+    // Provider timeout (AbortSignal.timeout() throws DOMException with name "TimeoutError")
+    if (error instanceof DOMException && error.name === "TimeoutError") {
       return {
         errorType: OpenAICompatibleClient.ErrorType.TIMEOUT,
         message: "Provider request timed out",
@@ -113,6 +129,13 @@ export class OpenAICompatibleClient implements ProviderClient {
       };
     }
 
+    if (error instanceof SyntaxError) {
+      return {
+        errorType: OpenAICompatibleClient.ErrorType.MALFORMED_RESPONSE,
+        message: "Provider returned invalid JSON",
+      };
+    }
+
     if (error instanceof Error) {
       // Check the cause chain for HTTP status errors (from the client wrapper)
       const cause = error.cause;
@@ -130,7 +153,7 @@ export class OpenAICompatibleClient implements ProviderClient {
       // Check for timeout errors in the cause chain
       if (
         cause instanceof DOMException &&
-        (cause.name === "TimeoutError" || cause.name === "AbortError")
+        cause.name === "TimeoutError"
       ) {
         return {
           errorType: OpenAICompatibleClient.ErrorType.TIMEOUT,
@@ -163,7 +186,9 @@ export class OpenAICompatibleClient implements ProviderClient {
         cause instanceof Error &&
         (cause.message.includes("no choices") ||
           cause.message.includes("empty response") ||
-          cause.message.includes("empty choices"))
+          cause.message.includes("empty choices") ||
+          cause.message.includes("did not return a text stream") ||
+          cause.message.includes("did not return a response body"))
       ) {
         return {
           errorType: OpenAICompatibleClient.ErrorType.MALFORMED_RESPONSE,
@@ -264,7 +289,7 @@ export class OpenAICompatibleClient implements ProviderClient {
       };
     } catch (error) {
       const errorInfo = this.getErrorInfo(error);
-      throw new Error(errorInfo.message, {
+      throw new ProviderClientError(errorInfo.errorType, errorInfo.message, {
         cause: error,
       });
     }
@@ -336,7 +361,7 @@ export class OpenAICompatibleClient implements ProviderClient {
       };
     } catch (error) {
       const errorInfo = this.getErrorInfo(error);
-      throw new Error(errorInfo.message, {
+      throw new ProviderClientError(errorInfo.errorType, errorInfo.message, {
         cause: error,
       });
     }

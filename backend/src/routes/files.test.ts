@@ -9,6 +9,7 @@ import os from "node:os";
 import { Writable } from "node:stream";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { registerGlobalErrorHandler } from "../utils/errorHandler.js";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
@@ -190,8 +191,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects request without a file", async () => {
@@ -210,8 +211,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("No file uploaded");
+    expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+    expect(json.error.message).toContain("could not be uploaded");
   });
 
   it("rejects oversized files", async () => {
@@ -237,6 +238,9 @@ describe("file upload endpoint", () => {
         },
       });
 
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
       // Register the files route
       const filesRoute = (await import("./files.js")).default;
       await testApp.register(filesRoute);
@@ -256,8 +260,8 @@ describe("file upload endpoint", () => {
 
       expect(response.statusCode).toBe(413);
       const json = JSON.parse(response.body);
-      expect(json.success).toBe(false);
-      expect(json.error).toContain("maximum allowed size");
+      expect(json.error.code).toBe("FILE_TOO_LARGE");
+      expect(json.error.message).toContain("too large");
 
       // Verify no partial files remain in the upload directory
       const filesAfter = await readdir(testUploadDir);
@@ -310,8 +314,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects unsupported extension with allowed MIME (payload.exe + application/pdf)", async () => {
@@ -331,8 +335,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects allowed extension with incompatible MIME (.pdf + text/plain)", async () => {
@@ -352,8 +356,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not allowed");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("path traversal filename cannot escape temp directory", async () => {
@@ -434,8 +438,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("Only one file is allowed");
+    expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+    expect(json.error.message).toContain("could not be uploaded");
 
     // Verify no files from this rejected request remain in the upload directory
     const filesAfter = await readdir(testUploadDir);
@@ -555,6 +559,9 @@ describe("file upload endpoint", () => {
         },
       });
 
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
       const filesRoute = (await import("./files.js")).default;
       await testApp.register(filesRoute);
 
@@ -573,7 +580,7 @@ describe("file upload endpoint", () => {
       // Should fail with 500 due to write stream error
       expect(response.statusCode).toBe(500);
       const json = JSON.parse(response.body);
-      expect(json.success).toBe(false);
+      expect(json.error.code).toBe("INTERNAL_ERROR");
 
       // Verify the cleanup branch removed the partial file from the upload directory
       const filesAfter = await readdir(testUploadDir);
@@ -680,8 +687,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("does not contain usable text");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
 
     // Verify no temp file remains
     const files = await readdir(testUploadDir);
@@ -707,8 +713,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("does not appear to contain usable text");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
 
     // Verify no temp file remains
     const files = await readdir(testUploadDir);
@@ -820,9 +825,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("no extractable text");
-    expect(json.error).toContain("scanned");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
+    expect(json.error.message).toContain("scanned");
     // No fileId or extraction on failure
     expect(json.fileId).toBeUndefined();
     expect(json.extraction).toBeUndefined();
@@ -855,8 +859,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("could not be processed");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
     // No fileId or extraction on failure
     expect(json.fileId).toBeUndefined();
     expect(json.extraction).toBeUndefined();

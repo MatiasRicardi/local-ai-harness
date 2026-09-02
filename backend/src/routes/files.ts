@@ -6,13 +6,12 @@ import { extname } from "node:path";
 import { join } from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import type { FastifyMultipartBaseOptions } from "@fastify/multipart";
-import { consola } from "consola";
 import { config } from "../config/env.js";
 import { extractTxt } from "../extractors/txt.js";
 import { extractMarkdown } from "../extractors/markdown.js";
 import { extractPdf } from "../extractors/pdf.js";
-import { ExtractionError } from "../extractors/ExtractionError.js";
 import type { ExtractionResult } from "../extractors/types.js";
+import { AppError, normalizeError } from "../utils/errorHandler.js";
 
 const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".pdf"]);
 
@@ -105,9 +104,7 @@ const filesRoute: FastifyPluginAsync = async (server) => {
             if (destinationPath) {
               try {
                 await rm(destinationPath, { force: true });
-              } catch (cleanupErr) {
-                consola.error("[upload] cleanup failed", cleanupErr);
-              }
+              } catch {}
               destinationPath = undefined;
               responsePayload = undefined;
             }
@@ -122,9 +119,10 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           // Validate extension
           if (!isExtensionAllowed(originalFilename)) {
             await drainFileStream(part.file);
-            return reply.code(400).send({
-              success: false,
-              error: `File extension "${extname(originalFilename)}" is not supported. Allowed: .txt, .md, .pdf`,
+            throw new AppError({
+              code: "UNSUPPORTED_FILE",
+              statusCode: 400,
+              message: `This file type is not supported. Allowed: .txt, .md, .pdf`,
             });
           }
 
@@ -132,9 +130,11 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           const ext = extname(originalFilename).toLowerCase();
           if (!isMimeAllowed(originalFilename, mimeType)) {
             await drainFileStream(part.file);
-            return reply.code(400).send({
-              success: false,
-              error: `MIME type "${mimeType}" is not allowed for ${ext} files.`,
+            throw new AppError({
+              code: "UNSUPPORTED_FILE",
+              statusCode: 400,
+              message: "This file type is not supported.",
+              detail: `MIME type is not allowed for ${ext} files.`,
             });
           }
 
@@ -154,12 +154,11 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           if (hasTruncatedFlag(part.file) && part.file.truncated) {
             try {
               await rm(destinationPath, { force: true });
-            } catch (cleanupErr) {
-              consola.error("[upload] cleanup failed", cleanupErr);
-            }
-            return reply.code(413).send({
-              success: false,
-              error: "File exceeds the maximum allowed size.",
+            } catch {}
+            throw new AppError({
+              code: "FILE_TOO_LARGE",
+              statusCode: 413,
+              message: "The uploaded file is too large.",
             });
           }
 
@@ -188,24 +187,30 @@ const filesRoute: FastifyPluginAsync = async (server) => {
         }
 
         if (multiFileDetected) {
-          return reply.code(400).send({
-            success: false,
-            error: "Only one file is allowed.",
+          throw new AppError({
+            code: "FILE_UPLOAD_ERROR",
+            statusCode: 400,
+            message: "The file could not be uploaded.",
+            detail: "Only one file is allowed.",
           });
         }
 
         // No file was received
         if (processedFileCount === 0) {
-          return reply.code(400).send({
-            success: false,
-            error: "No file uploaded. A single file is required.",
+          throw new AppError({
+            code: "FILE_UPLOAD_ERROR",
+            statusCode: 400,
+            message: "The file could not be uploaded.",
+            detail: "A single file is required.",
           });
         }
 
         if (!responsePayload) {
-          return reply.code(400).send({
-            success: false,
-            error: "No file uploaded. A single file is required.",
+          throw new AppError({
+            code: "FILE_UPLOAD_ERROR",
+            statusCode: 400,
+            message: "The file could not be uploaded.",
+            detail: "A single file is required.",
           });
         }
 
@@ -217,66 +222,16 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           });
         }
 
-        return reply.code(500).send({
-          success: false,
-          error: "Failed to process upload.",
-        });
       } catch (err) {
         // Cleanup partial file if it exists and the upload didn't complete
         if (destinationPath && !successResponseSent) {
           try {
             await rm(destinationPath, { force: true });
-          } catch (cleanupErr) {
-            consola.error("[upload] cleanup failed", cleanupErr);
-          }
+          } catch {}
         }
 
-        // Handle multipart-specific errors by matching error codes
-        const multipartError = err as { code?: string; statusCode?: number };
-        const errorCode = multipartError.code;
-
-        // File size limit errors (413)
-        if (errorCode === "FST_REQ_FILE_TOO_LARGE") {
-          return reply.code(413).send({
-            success: false,
-            error: "File exceeds the maximum allowed size.",
-          });
-        }
-
-        if (errorCode === "FST_FILES_LIMIT") {
-          return reply.code(400).send({
-            success: false,
-            error: "Only one file is allowed.",
-          });
-        }
-
-        // Premature close or invalid content type errors (400)
-        if (
-          errorCode === "FST_MP_PREMATURE_CLOSE" ||
-          errorCode === "FST_PROTO_VIOLATION"
-        ) {
-          return reply.code(400).send({
-            success: false,
-            error: "Invalid upload request.",
-          });
-        }
-
-        // Map ExtractionError to 400
-        if (err instanceof ExtractionError) {
-          return reply.code(400).send({
-            success: false,
-            error: err.message,
-          });
-        }
-
-        // For unexpected errors, log only stable operation name and safe error code
-        // Never expose raw errors, request data, or file contents
-        consola.error("[upload] unexpected error: upload_failed");
-
-        return reply.code(500).send({
-          success: false,
-          error: "Failed to process upload.",
-        });
+        // Normalize through the global error handler for unified response
+        throw normalizeError(err);
       }
     }
   );

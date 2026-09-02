@@ -123,8 +123,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when baseUrl is invalid", async () => {
@@ -141,8 +141,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when model is too long", async () => {
@@ -159,8 +159,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when timeout is negative", async () => {
@@ -178,8 +178,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 504 when provider request times out", async () => {
@@ -199,8 +199,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(504);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider request timed out");
+    expect(body.error.code).toBe("PROVIDER_TIMEOUT");
+    expect(body.error.message).toBe("The configured provider did not respond in time.");
   });
 
   it("returns 502 when provider returns an invalid response", async () => {
@@ -219,8 +219,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("invalid response");
+    expect(body.error.code).toBe("INVALID_PROVIDER_RESPONSE");
+    expect(body.error.message).toBe("The provider returned an invalid response.");
   });
 
   it("returns 401 when provider returns unauthorized error", async () => {
@@ -239,11 +239,11 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(401);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider authentication or authorization failed");
+    expect(body.error.code).toBe("PROVIDER_UNAUTHORIZED");
+    expect(body.error.message).toBe("The provider rejected the configured credentials.");
   });
 
-  it("returns 400 when provider returns malformed response", async () => {
+  it("returns 502 when provider returns malformed response", async () => {
     app = buildApp();
 
     global.fetch = mockFetchMalformed();
@@ -257,10 +257,10 @@ describe("provider test endpoint", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider returned a malformed response");
+    expect(body.error.code).toBe("INVALID_PROVIDER_RESPONSE");
+    expect(body.error.message).toBe("The provider returned an invalid response.");
   });
 
   it("returns 502 when provider is unreachable", async () => {
@@ -279,8 +279,8 @@ describe("provider test endpoint", () => {
 
     expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider connection failed");
+    expect(body.error.code).toBe("PROVIDER_UNREACHABLE");
+    expect(body.error.message).toBe("Unable to connect to the configured provider.");
   });
 
   it("uses custom timeout when provided without error", async () => {

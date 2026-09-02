@@ -9,6 +9,7 @@ describe("ErrorType", () => {
     expect(OpenAICompatibleClient.ErrorType.HTTP_ERROR).toBe("http_error");
     expect(OpenAICompatibleClient.ErrorType.MALFORMED_RESPONSE).toBe("malformed_response");
     expect(OpenAICompatibleClient.ErrorType.NETWORK_ERROR).toBe("network_error");
+    expect(OpenAICompatibleClient.ErrorType.USER_ABORT).toBe("user_abort");
     expect(OpenAICompatibleClient.ErrorType.UNKNOWN).toBe("unknown");
   });
 });
@@ -26,12 +27,12 @@ describe("getErrorInfo", () => {
     expect(result.message).toBe("Provider request timed out");
   });
 
-  it("detects timeout errors (AbortError)", () => {
+  it("detects user abort (AbortError)", () => {
     const error = new DOMException("The operation was aborted.", "AbortError");
     const result = client.getErrorInfo(error);
 
-    expect(result.errorType).toBe(OpenAICompatibleClient.ErrorType.TIMEOUT);
-    expect(result.message).toBe("Provider request timed out");
+    expect(result.errorType).toBe(OpenAICompatibleClient.ErrorType.USER_ABORT);
+    expect(result.message).toBe("Request was cancelled");
   });
 
   it("detects network errors", () => {
