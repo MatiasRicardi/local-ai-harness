@@ -7,12 +7,15 @@ import providerTest from "./routes/provider.js";
 import chat from "./routes/chat.js";
 import files from "./routes/files.js";
 import { config } from "./config/env.js";
+import { registerGlobalErrorHandler } from "./utils/errorHandler.js";
 
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
-    bodyLimit: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1024 * 1024, // +1MB overhead for multipart headers
+    bodyLimit: config.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + 1024 * 1024,
   });
+
+  registerGlobalErrorHandler(app);
 
   app.register(cors, {
     origin: config.CORS_ORIGINS,

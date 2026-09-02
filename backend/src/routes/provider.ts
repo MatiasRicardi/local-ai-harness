@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatMessagesSchema, providerConfigSchema } from "../provider/schemas.js";
 import { z } from "zod";
-import { mapErrorToReply } from "../utils/errorHandler.js";
+import { AppError, normalizeError } from "../utils/errorHandler.js";
 
 /**
  * Zod schema for provider test payload validation.
@@ -29,10 +29,7 @@ const providerTest: FastifyPluginAsync = async (server) => {
   server.post("/api/provider/test", async (request, reply) => {
     const result = providerTestPayloadSchema.safeParse(request.body);
     if (!result.success) {
-      return reply.code(400).send({
-        success: false,
-        error: "Invalid request payload",
-      });
+      throw normalizeError(result.error);
     }
 
     const payload = result.data;
@@ -64,9 +61,12 @@ const providerTest: FastifyPluginAsync = async (server) => {
       const assistantMessage = response.choices[0]?.message;
 
       if (!assistantMessage?.content) {
-        return reply.code(500).send({
-          success: false,
-          error: "Provider returned an empty response",
+        throw new AppError({
+          code: "INVALID_PROVIDER_RESPONSE",
+          statusCode: 502,
+          message: "The provider returned an invalid response.",
+          detail: "Provider returned an empty response",
+          cause: new Error("Provider returned an empty response"),
         });
       }
 
@@ -77,9 +77,14 @@ const providerTest: FastifyPluginAsync = async (server) => {
         text: assistantMessage.content,
       });
     } catch (error) {
-      const errorInfo = client.getErrorInfo(error);
-      const { code, body } = mapErrorToReply(errorInfo);
-      return reply.code(code).send(body);
+      // User/request cancellation stays silent
+      if (error instanceof Error) {
+        const errorInfo = client.getErrorInfo(error);
+        if (errorInfo.errorType === OpenAICompatibleClient.ErrorType.USER_ABORT) {
+          return reply.code(499).send({});
+        }
+      }
+      throw error;
     }
   });
 };

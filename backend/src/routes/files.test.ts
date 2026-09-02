@@ -9,6 +9,8 @@ import os from "node:os";
 import { Writable } from "node:stream";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { consola } from "consola";
+import { registerGlobalErrorHandler } from "../utils/errorHandler.js";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
@@ -17,6 +19,16 @@ vi.mock("node:fs", async () => {
     createWriteStream: vi.fn((_path: unknown) =>
       (actual as typeof import("node:fs")).createWriteStream(_path as string),
     ),
+  };
+});
+
+// Default rm behaves like the real implementation; tests that need to force a
+// cleanup failure override it with mockRejectedValueOnce().
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual("node:fs/promises");
+  return {
+    ...actual,
+    rm: vi.fn((actual as typeof import("node:fs/promises")).rm),
   };
 });
 
@@ -190,8 +202,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects request without a file", async () => {
@@ -210,8 +222,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("No file uploaded");
+    expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+    expect(json.error.message).toContain("could not be uploaded");
   });
 
   it("rejects oversized files", async () => {
@@ -237,6 +249,9 @@ describe("file upload endpoint", () => {
         },
       });
 
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
       // Register the files route
       const filesRoute = (await import("./files.js")).default;
       await testApp.register(filesRoute);
@@ -256,13 +271,81 @@ describe("file upload endpoint", () => {
 
       expect(response.statusCode).toBe(413);
       const json = JSON.parse(response.body);
-      expect(json.success).toBe(false);
-      expect(json.error).toContain("maximum allowed size");
+      expect(json.error.code).toBe("FILE_TOO_LARGE");
+      expect(json.error.message).toContain("too large");
 
       // Verify no partial files remain in the upload directory
       const filesAfter = await readdir(testUploadDir);
       expect(filesAfter).toHaveLength(0);
     } finally {
+      await testApp.close();
+    }
+  });
+
+  it("reports a cleanup failure without masking the original error or leaking paths", async () => {
+    const rmMock = vi.mocked(rm);
+    const errorSpy = vi.spyOn(consola, "error");
+
+    const Fastify = (await import("fastify")).default;
+    const multipart = (await import("@fastify/multipart")).default;
+    const cors = (await import("@fastify/cors")).default;
+    const sse = (await import("@fastify/sse")).default;
+
+    const testApp = Fastify({
+      bodyLimit: 10 * 1024 * 1024,
+    });
+
+    try {
+      await testApp.register(cors, {
+        origin: ["http://localhost:5173"],
+      });
+      await testApp.register(sse);
+      await testApp.register(multipart, {
+        limits: {
+          fileSize: 1024, // 1 KB - triggers truncation for a larger upload
+          files: 1,
+        },
+      });
+
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
+      const filesRoute = (await import("./files.js")).default;
+      await testApp.register(filesRoute);
+
+      // Force the temp-file cleanup (rm) to fail after the file is written.
+      rmMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+      // Distinctive, sensitive-looking content used to prove it is never logged
+      // when cleanup fails.
+      const largeContent = "S3CRET-FILE-CONTENT-9F3A".repeat(200);
+      const body = buildMultipartBody("big.txt", "text/plain", largeContent);
+
+      const response = await testApp.inject({
+        method: "POST",
+        url: "/api/files",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+        },
+        payload: body,
+      });
+
+      // The original validation error is preserved (not masked by the cleanup
+      // failure), so the client still receives FILE_TOO_LARGE.
+      expect(response.statusCode).toBe(413);
+      const json = JSON.parse(response.body);
+      expect(json.error.code).toBe("FILE_TOO_LARGE");
+
+      // The cleanup failure is reported at the boundary with a stable operation
+      // code, without logging the file path or contents.
+      const loggedMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages).toContain("[upload] cleanup_failed");
+      const loggedText = loggedMessages.join("\n");
+      expect(loggedText).not.toContain(testUploadDir);
+      expect(loggedText).not.toContain("S3CRET-FILE-CONTENT-9F3A");
+    } finally {
+      rmMock.mockRestore();
+      errorSpy.mockRestore();
       await testApp.close();
     }
   });
@@ -310,8 +393,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects unsupported extension with allowed MIME (payload.exe + application/pdf)", async () => {
@@ -331,8 +414,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not supported");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("rejects allowed extension with incompatible MIME (.pdf + text/plain)", async () => {
@@ -352,8 +435,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("not allowed");
+    expect(json.error.code).toBe("UNSUPPORTED_FILE");
+    expect(json.error.message).toContain("not supported");
   });
 
   it("path traversal filename cannot escape temp directory", async () => {
@@ -434,12 +517,64 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("Only one file is allowed");
+    expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+    expect(json.error.message).toContain("could not be uploaded");
 
     // Verify no files from this rejected request remain in the upload directory
     const filesAfter = await readdir(testUploadDir);
     expect(filesAfter).toHaveLength(0);
+  });
+
+  it("multi-file upload: outer cleanup removes the file when the first rm fails", async () => {
+    app = buildApp();
+
+    const rmMock = vi.mocked(rm);
+    // Reset the call log (the mock is module-level and accumulates across tests).
+    rmMock.mockClear();
+    // The first rm (multi-file branch) fails; the second rm (outer catch) must
+    // still remove the uploaded file so no residue is left behind.
+    rmMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    // Build a multipart body with TWO file parts
+    const header1 = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="file1.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+    const content1 = "first file content";
+    const header2 = `\r\n--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="file2.txt"\r\nContent-Type: text/plain\r\n\r\n`;
+    const content2 = "second file content";
+    const footer = `\r\n--${BOUNDARY}--\r\n`;
+
+    const body = Buffer.concat([
+      Buffer.from(header1, "utf-8"),
+      Buffer.from(content1, "utf-8"),
+      Buffer.from(header2, "utf-8"),
+      Buffer.from(content2, "utf-8"),
+      Buffer.from(footer, "utf-8"),
+    ]);
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/files",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+          "Content-Length": String(body.length),
+        },
+        payload: body,
+      });
+
+      expect(response.statusCode).toBe(400);
+      const json = JSON.parse(response.body);
+      expect(json.error.code).toBe("FILE_UPLOAD_ERROR");
+
+      // The multi-file branch rm failed (mockRejectedValueOnce above), but the
+      // outer cleanup retried and removed the file in the same request.
+      expect(rmMock).toHaveBeenCalledTimes(2);
+
+      // No residue left behind despite the transient first failure.
+      const filesAfter = await readdir(testUploadDir);
+      expect(filesAfter).toHaveLength(0);
+    } finally {
+      rmMock.mockRestore();
+    }
   });
 
   it("duplicate original filenames do not collide", async () => {
@@ -555,6 +690,9 @@ describe("file upload endpoint", () => {
         },
       });
 
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
       const filesRoute = (await import("./files.js")).default;
       await testApp.register(filesRoute);
 
@@ -573,7 +711,7 @@ describe("file upload endpoint", () => {
       // Should fail with 500 due to write stream error
       expect(response.statusCode).toBe(500);
       const json = JSON.parse(response.body);
-      expect(json.success).toBe(false);
+      expect(json.error.code).toBe("INTERNAL_ERROR");
 
       // Verify the cleanup branch removed the partial file from the upload directory
       const filesAfter = await readdir(testUploadDir);
@@ -680,8 +818,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("does not contain usable text");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
 
     // Verify no temp file remains
     const files = await readdir(testUploadDir);
@@ -707,8 +844,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("does not appear to contain usable text");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
 
     // Verify no temp file remains
     const files = await readdir(testUploadDir);
@@ -820,9 +956,8 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("no extractable text");
-    expect(json.error).toContain("scanned");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
+    expect(json.error.message).toContain("scanned");
     // No fileId or extraction on failure
     expect(json.fileId).toBeUndefined();
     expect(json.extraction).toBeUndefined();
@@ -855,8 +990,7 @@ describe("file upload endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const json = JSON.parse(response.body);
-    expect(json.success).toBe(false);
-    expect(json.error).toContain("could not be processed");
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
     // No fileId or extraction on failure
     expect(json.fileId).toBeUndefined();
     expect(json.extraction).toBeUndefined();

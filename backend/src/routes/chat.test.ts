@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../app.js";
 
+// Capture the native fetch before any test replaces it. Tests that need a real
+// network connection (e.g. disconnect tests) reach the test server through it.
+const nativeFetch = globalThis.fetch;
+
 function mockFetchSuccess(response: unknown) {
   return ((url: string, options: RequestInit) => {
     expect(url).toContain("/chat/completions");
@@ -100,8 +104,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when provider config is invalid", async () => {
@@ -126,8 +130,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when messages array is empty", async () => {
@@ -147,8 +151,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when message content is empty", async () => {
@@ -173,8 +177,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when message role is invalid", async () => {
@@ -199,8 +203,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when model exceeds 200 characters", async () => {
@@ -225,11 +229,11 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
-  it("returns 500 when provider returns empty message content", async () => {
+  it("returns 502 when provider returns empty message content", async () => {
     app = buildApp();
 
     global.fetch = ((url: string, options: RequestInit) => {
@@ -275,10 +279,10 @@ describe("chat endpoint", () => {
       },
     });
 
-    expect(response.statusCode).toBe(500);
+    expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider returned an empty response");
+    expect(body.error.code).toBe("INVALID_PROVIDER_RESPONSE");
+    expect(body.error.message).toBe("The provider returned an invalid response.");
   });
 
   it("returns 504 when provider request times out", async () => {
@@ -306,8 +310,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(504);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider request timed out");
+    expect(body.error.code).toBe("PROVIDER_TIMEOUT");
+    expect(body.error.message).toBe("The configured provider did not respond in time.");
   });
 
   it("returns 502 when provider is unreachable", async () => {
@@ -334,8 +338,8 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider connection failed");
+    expect(body.error.code).toBe("PROVIDER_UNREACHABLE");
+    expect(body.error.message).toBe("Unable to connect to the configured provider.");
   });
 
   it("returns 401 when provider returns unauthorized error", async () => {
@@ -370,11 +374,11 @@ describe("chat endpoint", () => {
 
     expect(response.statusCode).toBe(401);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider authentication or authorization failed");
+    expect(body.error.code).toBe("PROVIDER_UNAUTHORIZED");
+    expect(body.error.message).toBe("The provider rejected the configured credentials.");
   });
 
-  it("returns 400 when provider returns malformed response", async () => {
+  it("returns 502 when provider returns malformed response", async () => {
     app = buildApp();
 
     global.fetch = ((url: string, _: RequestInit) => {
@@ -413,10 +417,10 @@ describe("chat endpoint", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(502);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Provider returned a malformed response");
+    expect(body.error.code).toBe("INVALID_PROVIDER_RESPONSE");
+    expect(body.error.message).toBe("The provider returned an invalid response.");
   });
 
   it("uses custom timeout when provided without error", async () => {
@@ -672,8 +676,8 @@ describe("chat endpoint", () => {
 
       expect(response.statusCode).toBe(400);
       const body = JSON.parse(response.body);
-      expect(body.success).toBe(false);
-      expect(body.error).toBe("Invalid request payload");
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+      expect(body.error.message).toBe("The request contains invalid fields.");
     });
   });
 });
@@ -700,8 +704,8 @@ describe("chat/stream endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when provider config is invalid", async () => {
@@ -726,8 +730,8 @@ describe("chat/stream endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when messages array is empty", async () => {
@@ -747,8 +751,8 @@ describe("chat/stream endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when message content is empty", async () => {
@@ -773,8 +777,8 @@ describe("chat/stream endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 400 when message role is invalid", async () => {
@@ -799,8 +803,8 @@ describe("chat/stream endpoint", () => {
 
     expect(response.statusCode).toBe(400);
     const body = JSON.parse(response.body);
-    expect(body.success).toBe(false);
-    expect(body.error).toBe("Invalid request payload");
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toBe("The request contains invalid fields.");
   });
 
   it("returns 200 with error SSE event when provider is unreachable", async () => {
@@ -834,9 +838,8 @@ describe("chat/stream endpoint", () => {
     // SSE endpoint always returns 200, errors are in SSE events
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("text/event-stream");
-    // The response body should contain an error event
     expect(response.body).toContain("event: error");
-    expect(response.body).toContain("Provider connection failed");
+    expect(response.body).toContain("Unable to connect to the configured provider");
   });
 
   it("returns 200 with error SSE event when provider request times out", async () => {
@@ -870,7 +873,7 @@ describe("chat/stream endpoint", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("text/event-stream");
     expect(response.body).toContain("event: error");
-    expect(response.body).toContain("Provider request timed out");
+    expect(response.body).toContain("The configured provider did not respond in time");
   });
 
   it("returns 200 with error SSE event when provider returns unauthorized", async () => {
@@ -908,7 +911,7 @@ describe("chat/stream endpoint", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("text/event-stream");
     expect(response.body).toContain("event: error");
-    expect(response.body).toContain("Provider authentication or authorization failed");
+    expect(response.body).toContain("The provider rejected the configured credentials");
   });
 
   it("sends SSE headers when provider returns a stream", async () => {
@@ -970,6 +973,89 @@ describe("chat/stream endpoint", () => {
     expect(response.headers["content-type"]).toBe("text/event-stream");
     expect(response.headers["cache-control"]).toBe("no-cache");
     expect(response.headers["connection"]).toBe("keep-alive");
+  });
+
+  it("aborts the upstream provider request when the client disconnects before headers arrive", async () => {
+    app = buildApp();
+
+    let upstreamSignal: AbortSignal | undefined;
+
+    // Only intercept the provider call; let the client -> test-server call
+    // reach the real network.
+    const realFetch = nativeFetch;
+    global.fetch = ((url: string, options: RequestInit) => {
+      if (!url.includes("/chat/completions")) {
+        return realFetch(url, options);
+      }
+      expect(url).toContain("/chat/completions");
+      upstreamSignal = (options.signal as AbortSignal | undefined) ?? undefined;
+      // Stay pending until the client disconnect aborts this request, so the
+      // provider never sends headers before cancellation (pre-header path).
+      return new Promise<Response>((_resolve, reject) => {
+        (options.signal as AbortSignal | undefined)?.addEventListener(
+          "abort",
+          () => {
+            reject(
+              new DOMException("The operation was aborted.", "AbortError"),
+            );
+          },
+        );
+      });
+    }) as unknown as typeof globalThis.fetch;
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = (app.addresses?.()?.[0] ?? { port: 0 }) as { port: number };
+
+    const controller = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${port}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+      signal: controller.signal,
+    });
+
+    // Read the SSE stream until the route emits its start event. The provider
+    // fetch stays pending (never sends headers), so start is the first event.
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let sawStart = false;
+    while (!sawStart) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (decoder.decode(value, { stream: true }).includes("event: start")) {
+        sawStart = true;
+      }
+    }
+    expect(sawStart).toBe(true);
+
+    // Ensure the pending provider fetch has been registered.
+    while (!upstreamSignal) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(upstreamSignal!.aborted).toBe(false);
+
+    // Disconnect the client after the start event, while the provider request
+    // is still pending (before provider headers are received).
+    try {
+      controller.abort();
+      await reader.cancel();
+    } catch {
+      // Aborting the connection rejects in-flight reads; that is expected.
+    }
+
+    // Allow the server to observe the disconnect and propagate the abort.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The upstream provider request was aborted before headers arrived.
+    expect(upstreamSignal!.aborted).toBe(true);
+
+    global.fetch = realFetch;
+    await app.close();
   });
 
   it("sends start event with model name", async () => {

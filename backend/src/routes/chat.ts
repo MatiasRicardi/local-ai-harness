@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatRequestSchema, type ChatMessage } from "../provider/schemas.js";
-import { mapErrorToReply } from "../utils/errorHandler.js";
+import { normalizeError, AppError } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
 import {
   buildDocumentContextMessage,
@@ -53,10 +53,7 @@ const chat: FastifyPluginAsync = async (server) => {
     // Validate request payload using Zod schema
     const result = chatRequestSchema.safeParse(request.body);
     if (!result.success) {
-      return reply.code(400).send({
-        success: false,
-        error: "Invalid request payload",
-      });
+      throw normalizeError(result.error);
     }
 
     const { provider, messages, document, context } = result.data;
@@ -78,9 +75,18 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // If budget calculation says the request is invalid, reject before provider contact
     if (!budgetResult.valid) {
-      return reply.code(400).send({
-        success: false,
-        error: budgetResult.errorMessage,
+      const code = budgetResult.errorMessage?.includes("attached document")
+        ? "DOCUMENT_CONTEXT_TOO_LARGE"
+        : "CONTEXT_TOO_LARGE";
+      const message = budgetResult.errorMessage ?? (
+        code === "DOCUMENT_CONTEXT_TOO_LARGE"
+          ? "The current conversation is too large to include the attached document. Start a new conversation or increase the configured context size."
+          : "The current conversation is too large for the configured context size. Start a new conversation or increase the configured context size."
+      );
+      throw new AppError({
+        code,
+        statusCode: 400,
+        message,
       });
     }
 
@@ -106,9 +112,10 @@ const chat: FastifyPluginAsync = async (server) => {
       const assistantMessage = response.choices[0]?.message;
 
       if (!assistantMessage?.content) {
-        return reply.code(500).send({
-          success: false,
-          error: "Provider returned an empty response",
+        throw new AppError({
+          code: "INVALID_PROVIDER_RESPONSE",
+          statusCode: 502,
+          message: "The provider returned an invalid response.",
         });
       }
 
@@ -123,9 +130,14 @@ const chat: FastifyPluginAsync = async (server) => {
         finishReason: response.choices[0]?.finish_reason || null,
       });
     } catch (error) {
-      const errorInfo = client.getErrorInfo(error);
-      const { code, body } = mapErrorToReply(errorInfo);
-      return reply.code(code).send(body);
+      // User/request cancellation stays silent — do not classify as timeout/error
+      if (error instanceof Error && error.cause) {
+        const errorInfo = client.getErrorInfo(error);
+        if (errorInfo.errorType === OpenAICompatibleClient.ErrorType.USER_ABORT) {
+          return reply.code(499).send({});
+        }
+      }
+      throw error;
     }
   });
 
@@ -155,10 +167,7 @@ const chat: FastifyPluginAsync = async (server) => {
     // Validate request payload using Zod schema
     const result = chatRequestSchema.safeParse(request.body);
     if (!result.success) {
-      return reply.code(400).send({
-        success: false,
-        error: "Invalid request payload",
-      });
+      throw normalizeError(result.error);
     }
 
     const { provider, messages, document, context } = result.data;
@@ -180,9 +189,18 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // If budget calculation says the request is invalid, reject before provider contact
     if (!budgetResult.valid) {
-      return reply.code(400).send({
-        success: false,
-        error: budgetResult.errorMessage,
+      const code = budgetResult.errorMessage?.includes("attached document")
+        ? "DOCUMENT_CONTEXT_TOO_LARGE"
+        : "CONTEXT_TOO_LARGE";
+      const message = budgetResult.errorMessage ?? (
+        code === "DOCUMENT_CONTEXT_TOO_LARGE"
+          ? "The current conversation is too large to include the attached document. Start a new conversation or increase the configured context size."
+          : "The current conversation is too large for the configured context size. Start a new conversation or increase the configured context size."
+      );
+      throw new AppError({
+        code,
+        statusCode: 400,
+        message,
       });
     }
 
@@ -193,7 +211,6 @@ const chat: FastifyPluginAsync = async (server) => {
     const allMessages = buildAllMessages(documentForMessages, messages);
 
     // Create AbortController for client disconnect detection
-    const abortController = new AbortController();
     const cleanupController = new AbortController();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
@@ -220,7 +237,9 @@ const chat: FastifyPluginAsync = async (server) => {
     });
 
     try {
-      // Get the streaming response from the provider (passing abort signal for end-to-end cancellation)
+      // Get the streaming response from the provider. The timeout signal is owned
+      // by the client; cleanupController.signal lets reply.sse.onClose() abort the
+      // upstream request as soon as the client disconnects (before headers arrive).
       const stream = await client.chatStream(
         {
           baseUrl: provider.baseUrl,
@@ -229,7 +248,7 @@ const chat: FastifyPluginAsync = async (server) => {
           timeoutMs: provider.timeoutMs,
         },
         allMessages,
-        { signal: abortController.signal },
+        { signal: cleanupController.signal },
       );
 
       // Get the reader from the stream
@@ -267,17 +286,24 @@ const chat: FastifyPluginAsync = async (server) => {
         }
       }
     } catch (error) {
-      // If client disconnected, don't send error
+      // If client disconnected (user Stop/cancel), stay silent — no error event
       if (cleanupController.signal.aborted) {
         return;
       }
 
-      // Write error event
-      const errorInfo = client.getErrorInfo(error);
-      const { body: errorBody } = mapErrorToReply(errorInfo);
+      // User-initiated abort from the provider client is also silent
+      if (error instanceof Error) {
+        const errorInfo = client.getErrorInfo(error);
+        if (errorInfo.errorType === OpenAICompatibleClient.ErrorType.USER_ABORT) {
+          return;
+        }
+      }
+
+      // Provider error → send as SSE error event
+      const appError = normalizeError(error);
       await reply.sse.send({
         event: "error",
-        data: { message: errorBody.error },
+        data: { message: appError.userMessage },
       });
     }
   });
