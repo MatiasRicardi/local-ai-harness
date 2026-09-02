@@ -97,6 +97,7 @@ function handleReset() {
 
   // 10. Clear transient chat/stream/upload errors.
   error.value = null
+  uploadingDocument.value = false
 
   // 11. Normalize busy state back to idle.
   normalizeBusyState()

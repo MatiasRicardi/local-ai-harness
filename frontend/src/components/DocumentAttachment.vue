@@ -47,7 +47,9 @@ async function handleFileChange(event: Event) {
     props.onError(err instanceof Error ? err.message : "Upload failed.")
     resetInput()
   } finally {
-    emit("upload:end")
+    if (currentGeneration === uploadGeneration) {
+      emit("upload:end")
+    }
   }
 }
 
