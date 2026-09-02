@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { ref, watch } from "vue"
 import type { AttachedDocument } from "../services/files"
 import { uploadDocument, isSupportedExtension } from "../services/files"
 
@@ -9,9 +9,14 @@ interface Props {
   onAttach: (doc: AttachedDocument) => void
   onRemove: () => void
   onError: (message: string) => void
+  resetVersion?: number
 }
 
 const props = defineProps<Props>()
+
+// Local request generation used to ignore a late upload result after a
+// conversation reset, without moving upload ownership or adding an AbortSignal.
+let uploadGeneration = 0
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -26,19 +31,36 @@ async function handleFileChange(event: Event) {
     return
   }
 
+  // Pin this request's generation so a reset mid-upload can invalidate it.
+  const currentGeneration = ++uploadGeneration
+
   emit("upload:start")
 
   try {
     const doc = await uploadDocument(file)
+    // Ignore a late upload result that arrives after a conversation reset.
+    if (currentGeneration !== uploadGeneration) return
     props.onAttach(doc)
     resetInput()
   } catch (err) {
+    if (currentGeneration !== uploadGeneration) return
     props.onError(err instanceof Error ? err.message : "Upload failed.")
     resetInput()
   } finally {
-    emit("upload:end")
+    if (currentGeneration === uploadGeneration) {
+      emit("upload:end")
+    }
   }
 }
+
+// Invalidate any in-flight upload when the parent requests a reset.
+watch(
+  () => props.resetVersion,
+  () => {
+    uploadGeneration++
+    resetInput()
+  },
+)
 
 function handleButtonClick() {
   fileInputRef.value?.click()
