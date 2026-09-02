@@ -237,7 +237,9 @@ const chat: FastifyPluginAsync = async (server) => {
     });
 
     try {
-      // Get the streaming response from the provider (timeout signal owned by the client)
+      // Get the streaming response from the provider. The timeout signal is owned
+      // by the client; cleanupController.signal lets reply.sse.onClose() abort the
+      // upstream request as soon as the client disconnects (before headers arrive).
       const stream = await client.chatStream(
         {
           baseUrl: provider.baseUrl,
@@ -246,6 +248,7 @@ const chat: FastifyPluginAsync = async (server) => {
           timeoutMs: provider.timeoutMs,
         },
         allMessages,
+        { signal: cleanupController.signal },
       );
 
       // Get the reader from the stream

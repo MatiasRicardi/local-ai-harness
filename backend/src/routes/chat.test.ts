@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../app.js";
 
+// Capture the native fetch before any test replaces it. Tests that need a real
+// network connection (e.g. disconnect tests) reach the test server through it.
+const nativeFetch = globalThis.fetch;
+
 function mockFetchSuccess(response: unknown) {
   return ((url: string, options: RequestInit) => {
     expect(url).toContain("/chat/completions");
@@ -969,6 +973,81 @@ describe("chat/stream endpoint", () => {
     expect(response.headers["content-type"]).toBe("text/event-stream");
     expect(response.headers["cache-control"]).toBe("no-cache");
     expect(response.headers["connection"]).toBe("keep-alive");
+  });
+
+  it("aborts the upstream provider request when the client disconnects before headers arrive", async () => {
+    app = buildApp();
+
+    let upstreamSignal: AbortSignal | undefined;
+
+    // Only intercept the provider call; let the client -> test-server call
+    // reach the real network.
+    const realFetch = nativeFetch;
+    global.fetch = ((url: string, options: RequestInit) => {
+      if (!url.includes("/chat/completions")) {
+        return realFetch(url, options);
+      }
+      expect(url).toContain("/chat/completions");
+      upstreamSignal = (options.signal as AbortSignal | undefined) ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: mockStream,
+        headers: new Headers({
+          "content-type": "text/event-stream",
+        }),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    const mockStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(
+          encoder.encode('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'),
+        );
+      },
+    });
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = (app.addresses?.()?.[0] ?? { port: 0 }) as { port: number };
+
+    const controller = new AbortController();
+    const res = await fetch(`http://127.0.0.1:${port}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      }),
+      signal: controller.signal,
+    });
+
+    // Wait until the client has received the first delta, then disconnect.
+    const reader = res.body!.getReader();
+    await reader.read();
+    expect(upstreamSignal).toBeDefined();
+    expect(upstreamSignal!.aborted).toBe(false);
+
+    // Give the server a moment to forward the first chunk before aborting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Client disconnects before the upstream response completes.
+    try {
+      controller.abort();
+      await reader.cancel();
+    } catch {
+      // Aborting the connection rejects in-flight reads; that is expected.
+    }
+
+    // Allow the server to observe the disconnect and propagate the abort.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The upstream provider request was aborted before headers arrived.
+    expect(upstreamSignal!.aborted).toBe(true);
+
+    global.fetch = realFetch;
+    await app.close();
   });
 
   it("sends start event with model name", async () => {

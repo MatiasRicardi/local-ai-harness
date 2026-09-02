@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { OpenAICompatibleClient, normalizeBaseUrl } from "../client.js";
+import {
+  OpenAICompatibleClient,
+  normalizeBaseUrl,
+  ProviderClientError,
+} from "../client.js";
 
 // ── ErrorType tests ──────────────────────────────────────────────────────────
 
@@ -30,6 +34,22 @@ describe("getErrorInfo", () => {
   it("detects user abort (AbortError)", () => {
     const error = new DOMException("The operation was aborted.", "AbortError");
     const result = client.getErrorInfo(error);
+
+    expect(result.errorType).toBe(OpenAICompatibleClient.ErrorType.USER_ABORT);
+    expect(result.message).toBe("Request was cancelled");
+  });
+
+  it("preserves user abort classification when AbortError is wrapped as a cause", () => {
+    // Regression: chatStream/chat wrap the caught error in a ProviderClientError
+    // carrying the original AbortError as cause. getErrorInfo must still classify
+    // the wrapped AbortError as USER_ABORT so cancellation is not misreported.
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    const wrapped = new ProviderClientError(
+      OpenAICompatibleClient.ErrorType.NETWORK_ERROR,
+      "Provider connection failed",
+      { cause: abortError },
+    );
+    const result = client.getErrorInfo(wrapped);
 
     expect(result.errorType).toBe(OpenAICompatibleClient.ErrorType.USER_ABORT);
     expect(result.message).toBe("Request was cancelled");

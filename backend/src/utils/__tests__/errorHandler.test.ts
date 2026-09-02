@@ -88,6 +88,19 @@ describe("error handler", () => {
     expect(documentError).toMatchObject({ code: "DOCUMENT_CONTEXT_TOO_LARGE", statusCode: 400 });
   });
 
+  it.each([
+    "FST_MP_PREMATURE_CLOSE",
+    "FST_PROTO_VIOLATION",
+  ])("normalizes multipart parser error %s to a 400 client error", (code) => {
+    const appError = normalizeError(Object.assign(new Error("parse failed"), { code }));
+
+    expect(appError).toMatchObject({
+      code: "FILE_UPLOAD_ERROR",
+      statusCode: 400,
+      userMessage: "The file could not be uploaded.",
+    });
+  });
+
   it("returns a safe response for unexpected failures", () => {
     const response = serializeResponse(
       normalizeError(

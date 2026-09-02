@@ -14,6 +14,7 @@ export type AppErrorCode =
   | "UNSUPPORTED_FILE"
   | "FILE_TOO_LARGE"
   | "FILE_UPLOAD_ERROR"
+  | "FILE_CLEANUP_FAILED"
   | "EXTRACTION_FAILED"
   | "CONTEXT_TOO_LARGE"
   | "DOCUMENT_CONTEXT_TOO_LARGE"
@@ -66,6 +67,7 @@ const DEFAULT_MESSAGES: Record<AppErrorCode, string> = {
   UNSUPPORTED_FILE: "This file type is not supported.",
   FILE_TOO_LARGE: "The uploaded file is too large.",
   FILE_UPLOAD_ERROR: "The file could not be uploaded.",
+  FILE_CLEANUP_FAILED: "The uploaded file could not be removed.",
   EXTRACTION_FAILED: "Document extraction failed.",
   CONTEXT_TOO_LARGE:
     "The current conversation is too large for the configured context size. Start a new conversation or increase the configured context size.",
@@ -222,6 +224,22 @@ export function normalizeError(error: unknown): AppError {
       code: "FILE_TOO_LARGE",
       statusCode: 413,
       message: "The uploaded file is too large.",
+    });
+  }
+
+  // @fastify/multipart parser errors: the request itself was invalid.
+  // These are client errors (HTTP 400) when request.parts() fails.
+  const multipartError = error as { code?: string } | null;
+  const isMultipartParserError =
+    error instanceof Error &&
+    (multipartError?.code === "FST_MP_PREMATURE_CLOSE" ||
+      multipartError?.code === "FST_PROTO_VIOLATION");
+  if (isMultipartParserError) {
+    return new AppError({
+      code: "FILE_UPLOAD_ERROR",
+      statusCode: 400,
+      message: "The file could not be uploaded.",
+      detail: "The upload request was interrupted or is invalid.",
     });
   }
 

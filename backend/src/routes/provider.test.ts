@@ -223,6 +223,50 @@ describe("provider test endpoint", () => {
     expect(body.error.message).toBe("The provider returned an invalid response.");
   });
 
+  it("returns 502 with INVALID_PROVIDER_RESPONSE when the provider returns an empty response", async () => {
+    app = buildApp();
+
+    global.fetch = ((url: string, options: RequestInit) => {
+      expect(url).toContain("/chat/completions");
+      expect(options.method).toBe("POST");
+      return {
+        ok: true,
+        json: async () => ({
+          id: "chat-123",
+          object: "chat.completion",
+          created: Date.now(),
+          model: "test-model",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 0,
+            total_tokens: 10,
+          },
+        }),
+      };
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/provider/test",
+      payload: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "test-model",
+      },
+    });
+
+    expect(response.statusCode).toBe(502);
+    const body = JSON.parse(response.body);
+    expect(body.error.code).toBe("INVALID_PROVIDER_RESPONSE");
+    expect(body.error.message).toBe("The provider returned an invalid response.");
+  });
+
   it("returns 401 when provider returns unauthorized error", async () => {
     app = buildApp();
 

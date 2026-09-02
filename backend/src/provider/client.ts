@@ -161,6 +161,15 @@ export class OpenAICompatibleClient implements ProviderClient {
         };
       }
 
+      // Preserve user-initiated abort classification when the AbortError is
+      // wrapped (for example by ProviderClientError) so it is not lost.
+      if (cause instanceof DOMException && cause.name === "AbortError") {
+        return {
+          errorType: OpenAICompatibleClient.ErrorType.USER_ABORT,
+          message: "Request was cancelled",
+        };
+      }
+
       if (
         cause instanceof Error &&
         cause.message.startsWith("Provider returned HTTP")

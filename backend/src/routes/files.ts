@@ -6,6 +6,7 @@ import { extname } from "node:path";
 import { join } from "node:path";
 import type { FastifyPluginAsync } from "fastify";
 import type { FastifyMultipartBaseOptions } from "@fastify/multipart";
+import { consola } from "consola";
 import { config } from "../config/env.js";
 import { extractTxt } from "../extractors/txt.js";
 import { extractMarkdown } from "../extractors/markdown.js";
@@ -14,6 +15,32 @@ import type { ExtractionResult } from "../extractors/types.js";
 import { AppError, normalizeError } from "../utils/errorHandler.js";
 
 const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".pdf"]);
+
+/**
+ * Remove a temporary file, reporting failure through the global error boundary
+ * with a stable operation/code. Never logs the file path, file contents, or raw
+ * error details (CWE-539: omission of information about errors).
+ */
+async function removeTempFileSafely(path: string): Promise<void> {
+  try {
+    await rm(path, { force: true });
+  } catch (cleanupError) {
+    throw new AppError({
+      code: "FILE_CLEANUP_FAILED",
+      statusCode: 500,
+      message: "The uploaded file could not be removed.",
+      cause: cleanupError,
+    });
+  }
+}
+
+/**
+ * Report a cleanup failure at the logging boundary with a stable operation/code.
+ * Never logs file paths, file contents, or raw error details.
+ */
+function reportCleanupFailure(): void {
+  consola.error("[upload] cleanup_failed");
+}
 
 const MIME_MAP: Record<string, string[]> = {
   ".txt": ["text/plain"],
@@ -103,8 +130,12 @@ const filesRoute: FastifyPluginAsync = async (server) => {
             // Remove previously stored file so rejected multi-file requests leave no residue.
             if (destinationPath) {
               try {
-                await rm(destinationPath, { force: true });
-              } catch {}
+                await removeTempFileSafely(destinationPath);
+              } catch {
+                // Report cleanup failure without masking the rejection being
+                // returned below. Never logs the path or file contents.
+                reportCleanupFailure();
+              }
               destinationPath = undefined;
               responsePayload = undefined;
             }
@@ -153,8 +184,12 @@ const filesRoute: FastifyPluginAsync = async (server) => {
           // Check if the file was truncated by busboy (exceeded size limit)
           if (hasTruncatedFlag(part.file) && part.file.truncated) {
             try {
-              await rm(destinationPath, { force: true });
-            } catch {}
+              await removeTempFileSafely(destinationPath);
+            } catch {
+              // Report cleanup failure without masking the rejection returned
+              // below. Never logs the path or file contents.
+              reportCleanupFailure();
+            }
             throw new AppError({
               code: "FILE_TOO_LARGE",
               statusCode: 413,
@@ -223,11 +258,17 @@ const filesRoute: FastifyPluginAsync = async (server) => {
         }
 
       } catch (err) {
-        // Cleanup partial file if it exists and the upload didn't complete
+        // Cleanup partial file if it exists and the upload didn't complete.
+        // A cleanup failure is reported at the boundary but must not mask the
+        // original error being returned to the caller.
         if (destinationPath && !successResponseSent) {
           try {
-            await rm(destinationPath, { force: true });
-          } catch {}
+            await removeTempFileSafely(destinationPath);
+          } catch {
+            // Report cleanup failure without masking the original error.
+            // Never logs the path or file contents.
+            reportCleanupFailure();
+          }
         }
 
         // Normalize through the global error handler for unified response

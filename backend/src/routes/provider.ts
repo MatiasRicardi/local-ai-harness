@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatMessagesSchema, providerConfigSchema } from "../provider/schemas.js";
 import { z } from "zod";
-import { normalizeError } from "../utils/errorHandler.js";
+import { AppError, normalizeError } from "../utils/errorHandler.js";
 
 /**
  * Zod schema for provider test payload validation.
@@ -61,7 +61,13 @@ const providerTest: FastifyPluginAsync = async (server) => {
       const assistantMessage = response.choices[0]?.message;
 
       if (!assistantMessage?.content) {
-        throw new Error("Provider returned an empty response");
+        throw new AppError({
+          code: "INVALID_PROVIDER_RESPONSE",
+          statusCode: 502,
+          message: "The provider returned an invalid response.",
+          detail: "Provider returned an empty response",
+          cause: new Error("Provider returned an empty response"),
+        });
       }
 
       // Return a normalized success response

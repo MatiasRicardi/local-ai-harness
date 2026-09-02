@@ -9,6 +9,7 @@ import os from "node:os";
 import { Writable } from "node:stream";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { consola } from "consola";
 import { registerGlobalErrorHandler } from "../utils/errorHandler.js";
 
 vi.mock("node:fs", async () => {
@@ -18,6 +19,16 @@ vi.mock("node:fs", async () => {
     createWriteStream: vi.fn((_path: unknown) =>
       (actual as typeof import("node:fs")).createWriteStream(_path as string),
     ),
+  };
+});
+
+// Default rm behaves like the real implementation; tests that need to force a
+// cleanup failure override it with mockRejectedValueOnce().
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual("node:fs/promises");
+  return {
+    ...actual,
+    rm: vi.fn((actual as typeof import("node:fs/promises")).rm),
   };
 });
 
@@ -267,6 +278,74 @@ describe("file upload endpoint", () => {
       const filesAfter = await readdir(testUploadDir);
       expect(filesAfter).toHaveLength(0);
     } finally {
+      await testApp.close();
+    }
+  });
+
+  it("reports a cleanup failure without masking the original error or leaking paths", async () => {
+    const rmMock = vi.mocked(rm);
+    const errorSpy = vi.spyOn(consola, "error");
+
+    const Fastify = (await import("fastify")).default;
+    const multipart = (await import("@fastify/multipart")).default;
+    const cors = (await import("@fastify/cors")).default;
+    const sse = (await import("@fastify/sse")).default;
+
+    const testApp = Fastify({
+      bodyLimit: 10 * 1024 * 1024,
+    });
+
+    try {
+      await testApp.register(cors, {
+        origin: ["http://localhost:5173"],
+      });
+      await testApp.register(sse);
+      await testApp.register(multipart, {
+        limits: {
+          fileSize: 1024, // 1 KB - triggers truncation for a larger upload
+          files: 1,
+        },
+      });
+
+      // Register the global error handler first so it is the single error boundary
+      registerGlobalErrorHandler(testApp);
+
+      const filesRoute = (await import("./files.js")).default;
+      await testApp.register(filesRoute);
+
+      // Force the temp-file cleanup (rm) to fail after the file is written.
+      rmMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+      // Distinctive, sensitive-looking content used to prove it is never logged
+      // when cleanup fails.
+      const largeContent = "S3CRET-FILE-CONTENT-9F3A".repeat(200);
+      const body = buildMultipartBody("big.txt", "text/plain", largeContent);
+
+      const response = await testApp.inject({
+        method: "POST",
+        url: "/api/files",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+        },
+        payload: body,
+      });
+
+      // The original validation error is preserved (not masked by the cleanup
+      // failure), so the client still receives FILE_TOO_LARGE.
+      expect(response.statusCode).toBe(413);
+      const json = JSON.parse(response.body);
+      expect(json.error.code).toBe("FILE_TOO_LARGE");
+
+      // The cleanup failure is reported at the boundary with a stable operation
+      // code, without logging the file path or contents.
+      const loggedMessages = errorSpy.mock.calls.map((call) => String(call[0]));
+      expect(loggedMessages).toContain("[upload] cleanup_failed");
+      const loggedText = loggedMessages.join("\n");
+      expect(loggedText).not.toContain(testUploadDir);
+      expect(loggedText).not.toContain("S3CRET-FILE-CONTENT-9F3A");
+    } finally {
+      rmMock.mockRestore();
+      errorSpy.mockRestore();
       await testApp.close();
     }
   });
