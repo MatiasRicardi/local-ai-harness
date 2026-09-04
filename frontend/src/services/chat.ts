@@ -232,22 +232,29 @@ export async function chat(
   provider: ChatProviderConfig,
 ): Promise<ChatResponse> {
   const apiUrl = `${API_BASE}/api/chat`
+  let response: Response
   try {
-    const response = await fetch(apiUrl, {
+    response = await fetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages, provider }),
     })
-
-    if (!response.ok) {
-      // Normalize non-streaming HTTP errors through the shared parser.
-      return { success: false, error: await parseApiError(response) }
-    }
-
-    return response.json()
   } catch {
     // fetch() rejected before producing a Response (network failure): normalize
     // into the shared contract instead of rejecting the promise.
     return { success: false, error: toNetworkError() }
+  }
+
+  if (!response.ok) {
+    // Normalize non-streaming HTTP errors through the shared parser.
+    return { success: false, error: await parseApiError(response) }
+  }
+
+  try {
+    return await response.json()
+  } catch {
+    // 2xx response with an empty/malformed body is a decoding failure, not a
+    // network failure: classify it as unknown.
+    return { success: false, error: toUnknownError() }
   }
 }
