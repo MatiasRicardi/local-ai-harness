@@ -66,7 +66,12 @@ async function readApiErrorBody(response: Response): Promise<FrontendErrorData> 
   let parsed: unknown
   try {
     parsed = await response.json()
-  } catch {
+  } catch (err) {
+    // A cancellation surfaces as an AbortError. Re-throw it so the caller can
+    // preserve cancellation instead of turning it into a spurious error.
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err
+    }
     // Malformed / non-JSON body (e.g. an HTML gateway page): fall back safely.
     parsed = undefined
   }

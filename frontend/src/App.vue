@@ -8,11 +8,16 @@ import DocumentAttachment from "./components/DocumentAttachment.vue"
 import ChatInput from "./components/ChatInput.vue"
 import type { Message } from "./types"
 import type { AttachedDocument } from "./services/files"
-import { FrontendApiError, type AppUiError, type AppErrorArea } from "./types/error"
+import { FrontendApiError, type AppErrorArea } from "./types/error"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
-const error = ref<AppUiError | null>(null)
+// Area-keyed error record so a chat failure and an attachment failure are
+// stored independently and never overwrite each other.
+const errors = ref<Record<AppErrorArea, FrontendApiError | null>>({
+  chat: null,
+  attachment: null,
+})
 const sending = ref(false)
 const stopped = ref(false)
 const attachedDocument = ref<AttachedDocument | null>(null)
@@ -23,12 +28,8 @@ const documentContextWarning = ref<string | null>(null)
 
 // Contextual error split by area, so an error is shown once, near the
 // operation that produced it (chat/composer vs attachment/composer).
-const chatError = computed<FrontendApiError | null>(() =>
-  error.value && error.value.area === "chat" ? error.value.value : null,
-)
-const attachmentError = computed<FrontendApiError | null>(() =>
-  error.value && error.value.area === "attachment" ? error.value.value : null,
-)
+const chatError = computed<FrontendApiError | null>(() => errors.value.chat)
+const attachmentError = computed<FrontendApiError | null>(() => errors.value.attachment)
 
 // Generation identity used to ignore stale SSE callbacks after a reset.
 let generationId = 0
@@ -106,7 +107,7 @@ function handleReset() {
   documentContextWarning.value = null
 
   // 10. Clear transient chat/stream/upload errors.
-  error.value = null
+  errors.value = { chat: null, attachment: null }
   uploadingDocument.value = false
 
   // 11. Normalize busy state back to idle.
@@ -125,13 +126,12 @@ function handleRemove() {
 }
 
 function clearErrorForArea(area: AppErrorArea) {
-  if (error.value && error.value.area === area) {
-    error.value = null
-  }
+  errors.value[area] = null
 }
 
 function handleUploadError(uploadError: FrontendApiError) {
-  error.value = { area: "attachment", value: uploadError }
+  // Only the attachment area is touched, so an existing chat error is kept.
+  errors.value.attachment = uploadError
 }
 
 function handleUploadAttempt() {
@@ -253,7 +253,7 @@ async function handleSend(text: string) {
 
       assistantMessageId = null
       documentContextWarning.value = null
-      error.value = { area: "chat", value: chatError }
+      errors.value.chat = chatError
       cleanup()
       scrollToBottom("auto")
     },
@@ -278,10 +278,11 @@ async function handleSend(text: string) {
       cleanup()
       return
     }
-    error.value = {
-      area: "chat",
-      value: err instanceof FrontendApiError ? err : new FrontendApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong. Please try again." }),
-    }
+    const chatError =
+      err instanceof FrontendApiError
+        ? err
+        : new FrontendApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong. Please try again." })
+    errors.value.chat = chatError
     cleanup()
   }
 }

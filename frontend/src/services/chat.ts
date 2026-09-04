@@ -108,6 +108,12 @@ export async function streamChat(
     })
 
     if (!response.ok) {
+      // The request was cancelled while reading the error body: preserve
+      // cancellation rather than surfacing a spurious error.
+      if (options?.signal?.aborted) {
+        callbacks.onStopped()
+        return
+      }
       // HTTP error received before the stream started (e.g. validation,
       // context budget, provider failure). Normalize the shared contract.
       callbacks.onError(await parseApiError(response))
@@ -226,16 +232,22 @@ export async function chat(
   provider: ChatProviderConfig,
 ): Promise<ChatResponse> {
   const apiUrl = `${API_BASE}/api/chat`
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, provider }),
-  })
+  try {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, provider }),
+    })
 
-  if (!response.ok) {
-    // Normalize non-streaming HTTP errors through the shared parser.
-    return { success: false, error: await parseApiError(response) }
+    if (!response.ok) {
+      // Normalize non-streaming HTTP errors through the shared parser.
+      return { success: false, error: await parseApiError(response) }
+    }
+
+    return response.json()
+  } catch {
+    // fetch() rejected before producing a Response (network failure): normalize
+    // into the shared contract instead of rejecting the promise.
+    return { success: false, error: toNetworkError() }
   }
-
-  return response.json()
 }
