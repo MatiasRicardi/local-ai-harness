@@ -614,9 +614,10 @@ describe("file upload endpoint", () => {
     expect(json1.originalFilename).toBe("statement.pdf");
     expect(json2.originalFilename).toBe("statement.pdf");
 
-    // Verify two distinct files exist in the upload directory
+    // Step 22: a successful extraction removes its temp file, so no residue
+    // remains even though the two uploads used the same original filename.
     const files = await readdir(testUploadDir);
-    expect(files.filter((f) => f.endsWith(".pdf"))).toHaveLength(2);
+    expect(files.filter((f) => f.endsWith(".pdf"))).toHaveLength(0);
   });
 
   it("response never exposes filesystem path", async () => {
@@ -771,6 +772,55 @@ describe("file upload endpoint", () => {
     expect(json.extraction.text).toBe(content);
     expect(json.extraction.characterCount).toBe(content.length);
     expect(json.extraction.warnings).toHaveLength(0);
+  });
+
+  it("successful extraction leaves no temp file behind (Step 22)", async () => {
+    app = buildApp();
+
+    const content = "Hello, this is a test text file.";
+    const body = buildMultipartBody("test.txt", "text/plain", content);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const json = JSON.parse(response.body);
+    expect(json.success).toBe(true);
+    expect(json.extraction).toBeDefined();
+
+    // The temp file must be removed before the request lifecycle ends.
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".txt"))).toHaveLength(0);
+  });
+
+  it("failed extraction leaves no temp file behind (Step 22)", async () => {
+    app = buildApp();
+
+    // Non-PDF content with a .pdf MIME/extraction path fails extraction.
+    const body = buildMultipartBody("scanned.pdf", "application/pdf", "just text");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/files",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(400);
+    const json = JSON.parse(response.body);
+    expect(json.error.code).toBe("EXTRACTION_FAILED");
+
+    // The primary error is preserved and no temp file remains.
+    const files = await readdir(testUploadDir);
+    expect(files.filter((f) => f.endsWith(".pdf"))).toHaveLength(0);
   });
 
   it("extracts Markdown from a .md file and preserves syntax", async () => {
