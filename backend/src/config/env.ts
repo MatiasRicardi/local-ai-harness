@@ -10,6 +10,7 @@ const DEFAULTS = {
   MAX_UPLOAD_SIZE_MB: 10,
   UPLOAD_DIR: "./uploads",
   DEFAULT_PROVIDER_TIMEOUT_MS: 120000,
+  TEMP_FILE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
   ENVIRONMENT: "development",
 };
 
@@ -34,6 +35,10 @@ const envSchema = z.object({
     .string()
     .transform((val) => parseInt(val, 10))
     .pipe(z.number().int().positive()),
+  TEMP_FILE_MAX_AGE_MS: z
+    .string()
+    .transform((val) => parseInt(val, 10))
+    .pipe(z.number().int().positive()),
   ENVIRONMENT: z.enum(["development", "production", "test"]),
 });
 
@@ -48,6 +53,7 @@ export function loadConfig(): Config {
     MAX_UPLOAD_SIZE_MB: DEFAULTS.MAX_UPLOAD_SIZE_MB.toString(),
     UPLOAD_DIR: DEFAULTS.UPLOAD_DIR,
     DEFAULT_PROVIDER_TIMEOUT_MS: DEFAULTS.DEFAULT_PROVIDER_TIMEOUT_MS.toString(),
+    TEMP_FILE_MAX_AGE_MS: DEFAULTS.TEMP_FILE_MAX_AGE_MS.toString(),
     ENVIRONMENT: DEFAULTS.ENVIRONMENT,
   };
 

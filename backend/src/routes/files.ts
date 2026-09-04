@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
-import { mkdir, stat, rm } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { join } from "node:path";
+import { removeTemporaryFile } from "../files/cleanup.js";
 import type { FastifyPluginAsync } from "fastify";
 import type { FastifyMultipartBaseOptions } from "@fastify/multipart";
 import { consola } from "consola";
@@ -23,7 +24,8 @@ const ALLOWED_EXTENSIONS = new Set([".txt", ".md", ".pdf"]);
  */
 async function removeTempFileSafely(path: string): Promise<void> {
   try {
-    await rm(path, { force: true });
+    // Centralized, containment-checked deletion (Step 22).
+    await removeTemporaryFile(path, config.UPLOAD_DIR);
   } catch (cleanupError) {
     throw new AppError({
       code: "FILE_CLEANUP_FAILED",
@@ -252,6 +254,16 @@ const filesRoute: FastifyPluginAsync = async (server) => {
         }
 
         if (responsePayload) {
+          // Extraction result is already in memory: remove the temporary file so
+          // no residue outlives the request (Step 22). A best-effort cleanup
+          // failure is logged but never fails an otherwise successful request.
+          if (destinationPath) {
+            try {
+              await removeTempFileSafely(destinationPath);
+            } catch {
+              reportCleanupFailure();
+            }
+          }
           successResponseSent = true;
           return reply.code(200).send({
             success: true,
