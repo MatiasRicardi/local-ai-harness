@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { ref, computed } from "vue"
 import { streamChat, type ChatMessage, type ChatProviderConfig, type StreamCallbacks } from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
@@ -8,10 +8,16 @@ import DocumentAttachment from "./components/DocumentAttachment.vue"
 import ChatInput from "./components/ChatInput.vue"
 import type { Message } from "./types"
 import type { AttachedDocument } from "./services/files"
+import { FrontendApiError, type AppErrorArea } from "./types/error"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
-const error = ref<string | null>(null)
+// Area-keyed error record so a chat failure and an attachment failure are
+// stored independently and never overwrite each other.
+const errors = ref<Record<AppErrorArea, FrontendApiError | null>>({
+  chat: null,
+  attachment: null,
+})
 const sending = ref(false)
 const stopped = ref(false)
 const attachedDocument = ref<AttachedDocument | null>(null)
@@ -19,6 +25,11 @@ const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
 const abortController = ref<AbortController | null>(null)
 const documentContextWarning = ref<string | null>(null)
+
+// Contextual error split by area, so an error is shown once, near the
+// operation that produced it (chat/composer vs attachment/composer).
+const chatError = computed<FrontendApiError | null>(() => errors.value.chat)
+const attachmentError = computed<FrontendApiError | null>(() => errors.value.attachment)
 
 // Generation identity used to ignore stale SSE callbacks after a reset.
 let generationId = 0
@@ -96,7 +107,7 @@ function handleReset() {
   documentContextWarning.value = null
 
   // 10. Clear transient chat/stream/upload errors.
-  error.value = null
+  errors.value = { chat: null, attachment: null }
   uploadingDocument.value = false
 
   // 11. Normalize busy state back to idle.
@@ -114,8 +125,18 @@ function handleRemove() {
   attachedDocument.value = null
 }
 
-function handleUploadError(message: string) {
-  error.value = message
+function clearErrorForArea(area: AppErrorArea) {
+  errors.value[area] = null
+}
+
+function handleUploadError(uploadError: FrontendApiError) {
+  // Only the attachment area is touched, so an existing chat error is kept.
+  errors.value.attachment = uploadError
+}
+
+function handleUploadAttempt() {
+  // A new attachment attempt clears a previous attachment error.
+  clearErrorForArea("attachment")
 }
 
 function handleUploadStart() {
@@ -154,7 +175,8 @@ async function handleSend(text: string) {
     content: userMessage.content,
   })
   loading.value = true
-  error.value = null
+  // A new chat send clears a previous chat error.
+  clearErrorForArea("chat")
   scrollToBottom("auto")
 
   abortController.value = new AbortController()
@@ -225,13 +247,13 @@ async function handleSend(text: string) {
       cleanup()
       scrollToBottom("auto")
     },
-    onError: (message: string) => {
+    onError: (chatError: FrontendApiError) => {
       // Ignore callbacks from a previous generation (reset/cancel happened).
       if (currentGenerationId !== generationId) return
 
       assistantMessageId = null
       documentContextWarning.value = null
-      error.value = message
+      errors.value.chat = chatError
       cleanup()
       scrollToBottom("auto")
     },
@@ -256,7 +278,11 @@ async function handleSend(text: string) {
       cleanup()
       return
     }
-    error.value = err instanceof Error ? err.message : "Error sending message."
+    const chatError =
+      err instanceof FrontendApiError
+        ? err
+        : new FrontendApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong. Please try again." })
+    errors.value.chat = chatError
     cleanup()
   }
 }
@@ -279,17 +305,30 @@ async function handleSend(text: string) {
       <ProviderSettings />
       <section class="chat-panel">
         <div class="chat-inner">
-          <ChatMessages :messages="messages" :loading="loading" :error="error" :stopped="stopped" />
+          <ChatMessages
+            :messages="messages"
+            :loading="loading"
+            :error="chatError"
+            :stopped="stopped"
+          />
           <div v-if="documentContextWarning" class="document-context-warning">
             <span class="warning-icon">⚠️</span>
             {{ documentContextWarning }}
           </div>
           <div ref="messagesEnd" />
           <div class="composer-container">
+            <div v-if="attachmentError" class="attachment-error" role="alert">
+              <span class="attachment-error-message">{{ attachmentError.message }}</span>
+              <span
+                v-if="attachmentError.detail"
+                class="attachment-error-detail"
+              >{{ attachmentError.detail }}</span>
+            </div>
             <DocumentAttachment
               :attached-document="attachedDocument"
               :uploading="uploadingDocument"
               :reset-version="attachmentResetVersion"
+              @attempt="handleUploadAttempt"
               @attach="handleAttach"
               @remove="handleRemove"
               @error="handleUploadError"
@@ -405,6 +444,27 @@ async function handleSend(text: string) {
   border-radius: 6px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.attachment-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--error, #ef4444);
+  border-radius: 6px;
+  color: var(--text, #b91c1c);
+  font-size: 13px;
+}
+
+.attachment-error-message {
+  font-weight: 600;
+}
+
+.attachment-error-detail {
+  font-size: 12px;
+  opacity: 0.8;
 }
 
 .warning-icon {

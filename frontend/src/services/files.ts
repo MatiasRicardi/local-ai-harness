@@ -1,3 +1,5 @@
+import { parseApiError } from "../utils/parseApiError"
+
 export interface AttachedDocument {
   fileId: string
   originalFilename: string
@@ -23,6 +25,11 @@ export interface FileUploadResponse {
   }
 }
 
+/**
+ * @deprecated Retained for backward compatibility. Upload failures now throw a
+ * normalized `FrontendApiError` (see `parseApiError`). This shape is kept so
+ * external consumers importing it are not broken; its shape is preserved.
+ */
 export interface FileUploadError {
   success: false
   error: string
@@ -47,9 +54,8 @@ export async function uploadDocument(
   })
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    const message = (body as { error?: string }).error ?? "Upload failed."
-    throw new Error(message)
+    // Normalize the shared backend contract instead of throwing a raw string.
+    throw await parseApiError(response)
   }
 
   const data = (await response.json()) as FileUploadResponse

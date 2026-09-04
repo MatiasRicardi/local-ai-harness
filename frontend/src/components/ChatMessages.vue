@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import type { Message } from "../types"
+import type { FrontendApiError } from "../types/error"
 import { renderMarkdown } from "../utils/markdown"
 
 interface Props {
   messages: Message[]
   loading: boolean
-  error: string | null
+  error: FrontendApiError | null
   stopped: boolean
 }
 
@@ -21,8 +22,9 @@ function renderAssistantContent(content: string): string {
 
 <template>
   <div class="chat-messages">
-    <div v-if="error" class="error">
-      <p>{{ error }}</p>
+    <div v-if="error" class="error" role="alert">
+      <p>{{ error.message }}</p>
+      <span v-if="error.detail" class="error-detail">{{ error.detail }}</span>
     </div>
 
     <div v-if="!hasMessages" class="empty-state">
@@ -105,6 +107,13 @@ function renderAssistantContent(content: string): string {
 .error p {
   margin: 0;
   font-size: 0.9rem;
+}
+
+.error-detail {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  opacity: 0.85;
 }
 
 .message {

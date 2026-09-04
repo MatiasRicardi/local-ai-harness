@@ -1209,4 +1209,97 @@ describe("chat/stream endpoint", () => {
     expect(body).toContain('event: error');
     expect(body).toContain('Stream ended without [DONE]');
   });
+
+  it("emits a stable error code in the SSE error payload for a known mid-stream provider failure", async () => {
+    app = buildApp();
+
+    // Provider failure that surfaces after the start event has been sent,
+    // i.e. through the streaming error boundary (not the global handler).
+    global.fetch = ((url: string, options: RequestInit) => {
+      expect(url).toContain("/chat/completions");
+      expect(options.method).toBe("POST");
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("text/event-stream");
+    expect(response.body).toContain("event: start");
+    expect(response.body).toContain("event: error");
+    expect(response.body).toContain('"code":"PROVIDER_UNREACHABLE"');
+    expect(response.body).toContain("Unable to connect to the configured provider");
+  });
+
+  it("emits a stable error code in the SSE error payload for a provider timeout", async () => {
+    app = buildApp();
+
+    global.fetch = ((_url: string, _options: RequestInit) => {
+      throw new DOMException("The operation timed out", "TimeoutError");
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model", timeoutMs: 100 },
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("event: error");
+    expect(response.body).toContain('"code":"PROVIDER_TIMEOUT"');
+    expect(response.body).toContain("The configured provider did not respond in time");
+  });
+
+  it("emits INTERNAL_ERROR in the SSE error payload for an unexpected mid-stream failure", async () => {
+    app = buildApp();
+
+    global.fetch = (() => {
+      throw new Error("unexpected internal boom");
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("event: error");
+    expect(response.body).toContain('"code":"INTERNAL_ERROR"');
+  });
+
+  it("does not emit an error event/code when the user cancels generation", async () => {
+    app = buildApp();
+
+    // User-initiated abort must stay silent, never mapped to an error code.
+    global.fetch = (() => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("event: start");
+    expect(response.body).not.toContain("event: error");
+  });
 });
