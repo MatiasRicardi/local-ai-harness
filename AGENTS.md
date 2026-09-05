@@ -93,6 +93,7 @@ Environment variables:
 * `AI_MAX_UPLOAD_SIZE_MB`: default `10`
 * `AI_UPLOAD_DIR`: default `./uploads`
 * `AI_DEFAULT_PROVIDER_TIMEOUT_MS`: default `120000`
+* `AI_TEMP_FILE_MAX_AGE_MS`: default `86400000` (24h); stale temp-file cleanup threshold
 * `AI_ENVIRONMENT`: default `development`
 
 Use `.env.example` as the source of truth. Never log or persist API keys, credentials, or uploaded file contents.
