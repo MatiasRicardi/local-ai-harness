@@ -105,6 +105,24 @@ describe("env configuration", () => {
     expect(() => loadConfig()).toThrow(/Invalid configuration/);
   });
 
+  it("accepts a valid TEMP_FILE_MAX_AGE_MS", () => {
+    process.env.AI_TEMP_FILE_MAX_AGE_MS = "86400000";
+
+    expect(loadConfig().TEMP_FILE_MAX_AGE_MS).toBe(86400000);
+  });
+
+  it("rejects malformed TEMP_FILE_MAX_AGE_MS values", () => {
+    process.env.AI_TEMP_FILE_MAX_AGE_MS = "1hour";
+
+    expect(() => loadConfig()).toThrow(/Invalid configuration/);
+  });
+
+  it("rejects non-integer TEMP_FILE_MAX_AGE_MS values", () => {
+    process.env.AI_TEMP_FILE_MAX_AGE_MS = "1.5";
+
+    expect(() => loadConfig()).toThrow(/Invalid configuration/);
+  });
+
   it("trims CORS origins", () => {
     process.env.AI_CORS_ORIGINS = "  http://a.com  ,  http://b.com  ";
 

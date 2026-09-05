@@ -37,7 +37,7 @@ const envSchema = z.object({
     .pipe(z.number().int().positive()),
   TEMP_FILE_MAX_AGE_MS: z
     .string()
-    .transform((val) => parseInt(val, 10))
+    .transform((val) => Number(val))
     .pipe(z.number().int().positive()),
   ENVIRONMENT: z.enum(["development", "production", "test"]),
 });

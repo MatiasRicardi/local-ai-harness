@@ -3,16 +3,26 @@ import { config } from "./config/env.js";
 import { consola } from "consola";
 import { mkdir } from "node:fs/promises";
 import { cleanupStaleTemporaryFiles } from "./files/cleanup.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 let app: ReturnType<typeof buildApp> | null = null;
 
-async function main() {
+// The upload directory is required: a failure here rejects main() before
+// app.listen() runs, so the process exits (fail-fast) rather than starting in
+// a state where upload routes cannot work. This is intentionally NOT
+// best-effort, unlike the stale-file cleanup that follows.
+export async function ensureUploadDirectory(): Promise<void> {
+  await mkdir(config.UPLOAD_DIR, { recursive: true });
+}
+
+export async function main() {
   app = buildApp();
 
   // Ensure the configured upload directory exists, then best-effort remove any
   // stale temporary files left by previous runs or interrupted requests.
-  // Startup cleanup is operational hygiene and never blocks startup.
-  await mkdir(config.UPLOAD_DIR, { recursive: true });
+  // Cleanup is operational hygiene and never blocks startup.
+  await ensureUploadDirectory();
   try {
     const summary = await cleanupStaleTemporaryFiles(
       config.UPLOAD_DIR,
@@ -48,7 +58,16 @@ process.on("SIGTERM", async () => {
   process.exit(0);
 });
 
-main().catch((err) => {
-  consola.error("Failed to start backend:", err);
-  process.exit(1);
-});
+// Auto-start only when this module is the entry point (e.g. `node dist/server.js`
+// or `tsx server.ts`). When imported (e.g. by tests) the caller decides when to
+// start, so tests can exercise main()/ensureUploadDirectory() in isolation.
+const invokedAsMainEntry =
+  typeof process.argv[1] === "string" &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (invokedAsMainEntry) {
+  main().catch((err) => {
+    consola.error("Failed to start backend:", err);
+    process.exit(1);
+  });
+}
