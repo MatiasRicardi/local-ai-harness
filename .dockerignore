@@ -1,0 +1,58 @@
+# Docker build context exclusions for this repository.
+#
+# Both images are built from the repository root:
+#   docker build -f backend/Dockerfile  -t local-ai-harness-backend:local  .
+#   docker build -f frontend/Dockerfile -t local-ai-harness-frontend:local .
+# so this single root file is the one Docker reads (files in subdirectories are
+# ignored when the context is the repository root).
+#
+# Patterns use `**/` so nested locations (backend/, frontend/) are matched too.
+
+# Dependency and build output: always recreated inside the images.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# Test output.
+**/coverage
+
+# Test sources are not build inputs for production images (Step 24.1).
+# Test-only helpers that do not match this pattern may still be present; that
+# is acceptable and keeps the packaging simple.
+**/*.test.ts
+
+# Environment files: never bake .env contents (or future secrets) into layers.
+**/.env*
+
+# Logs.
+**/logs
+**/*.log
+
+# Temporary upload data.
+**/uploads
+**/temp
+/tmp
+
+# Version control.
+.git
+.gitignore
+.github
+
+# Editor / OS artifacts.
+.vscode
+.idea
+**/.DS_Store
+Thumbs.db
+**/*.swp
+**/*.swo
+
+# npm lockfile kept next to the authoritative pnpm-lock.yaml; the images use
+# pnpm only. Excluded from the context (not deleted from the repository).
+package-lock.json
+
+# Intentionally NOT ignored, because the builds require them:
+#   package.json, backend/package.json, frontend/package.json,
+#   pnpm-lock.yaml, pnpm-workspace.yaml, backend/tsconfig.json,
+#   frontend/tsconfig*.json, backend/src, frontend/src, frontend/index.html,
+#   frontend/public, frontend/vite.config.ts, backend/Dockerfile,
+#   frontend/Dockerfile, frontend/nginx.conf

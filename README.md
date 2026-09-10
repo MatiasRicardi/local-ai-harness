@@ -57,6 +57,10 @@ pnpm dev:frontend
 pnpm dev
 ```
 
+### Docker
+
+Production images for the backend and frontend can be built and run directly with Docker: see [docs/docker.md](docs/docker.md).
+
 ## 📄 License
 
 MIT
