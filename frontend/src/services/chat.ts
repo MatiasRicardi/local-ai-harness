@@ -168,8 +168,9 @@ export async function streamChat(
           const data = trimmed.slice(6)
           if (currentEvent) {
             currentEvent.data = data
-            // Dispatch the event
-            dispatchEvent(currentEvent, callbacks)
+            // Dispatch the event and let a terminal (done) event mark the
+            // stream as completed within streamChat's scope.
+            completed = dispatchEvent(currentEvent, callbacks)
             currentEvent = null
           }
           // If there's no currentEvent, this is an unexpected "data:" line
@@ -201,7 +202,7 @@ export async function streamChat(
 function dispatchEvent(
   event: { type: "start" | "delta" | "done" | "error"; data: string },
   callbacks: StreamCallbacks,
-): void {
+): boolean {
   try {
     const parsed = JSON.parse(event.data) as {
       model?: string
@@ -222,18 +223,20 @@ function dispatchEvent(
         }
         break
       case "done":
-        completed = true
         callbacks.onDone()
-        break
+        return true
       case "error": {
         // Mid-stream provider error carrying the stable backend code.
         callbacks.onError(parseStreamErrorData(parsed))
         break
       }
     }
+    // Non-terminal event.
+    return false
   } catch {
     // Malformed JSON — log and skip without crashing
     // This ensures malformed events don't break the stream consumer
+    return false
   }
 }
 
