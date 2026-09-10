@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
 import type { Mock } from "vitest"
 import { streamChat } from "../chat"
+import { API_BASE } from "../apiBase"
 import type {
   ChatProviderConfig,
   ContextTruncationMetadata,
@@ -265,5 +266,22 @@ describe("streamChat", () => {
 
     expect(callbacks.onStopped).toHaveBeenCalledTimes(1)
     expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
+  it("posts the streaming request to the resolved API base", async () => {
+    const callbacks = noopCallbacks()
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(okResponse(sseStream(["event: done\ndata: {}\n\n"]))),
+    )
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    // Same-origin `/api/chat/stream` unless VITE_API_URL sets an explicit base,
+    // which is what lets nginx proxy the SSE request in production.
+    expect(fetch).toHaveBeenCalledWith(
+      `${API_BASE}/api/chat/stream`,
+      expect.objectContaining({ method: "POST" }),
+    )
   })
 })

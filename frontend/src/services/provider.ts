@@ -1,6 +1,5 @@
 import { parseApiError, toNetworkError, toUnknownError } from "../utils/parseApiError"
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
+import { API_BASE } from "./apiBase"
 
 export interface ProviderTestRequest {
   baseUrl: string

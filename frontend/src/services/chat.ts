@@ -1,5 +1,6 @@
 import type { FrontendApiError } from "../types/error"
 import { parseApiError, parseStreamErrorData, toNetworkError, toUnknownError } from "../utils/parseApiError"
+import { API_BASE } from "./apiBase"
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant"
@@ -42,8 +43,6 @@ export interface ChatProviderConfig {
   apiKey?: string
   timeoutMs: number
 }
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000";
 
 export interface ContextTruncationMetadata {
   documentTruncated: boolean

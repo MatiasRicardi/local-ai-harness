@@ -59,7 +59,16 @@ pnpm dev
 
 ### Docker
 
-Production images for the backend and frontend can be built and run directly with Docker: see [docs/docker.md](docs/docker.md).
+The intended container workflow is Docker Compose, which builds both production
+images and proxies `/api` from the frontend to the backend on the same origin:
+
+```bash
+docker compose up --build   # then open http://127.0.0.1:8080
+docker compose down
+```
+
+The model server keeps running on your host, outside Docker. Each image can also
+be built and run on its own: see [docs/docker.md](docs/docker.md).
 
 ## 📄 License
 

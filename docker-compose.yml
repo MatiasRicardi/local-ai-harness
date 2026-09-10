@@ -1,0 +1,56 @@
+# Docker Compose for Local AI Harness (Step 24.2).
+#
+#   docker compose up --build     # then open http://127.0.0.1:8080
+#   docker compose down
+#
+# Two services only. The model server stays outside Docker: point the provider
+# base URL in the UI at http://host.docker.internal:<provider-port> while the
+# model server runs on the host (see docs/docker.md).
+#
+# Both images are built from the repository root because the Step 24.1
+# Dockerfiles need the pnpm workspace manifests and the frozen lockfile.
+# Runtime defaults (AI_HOST=0.0.0.0, AI_ENVIRONMENT=production,
+# AI_UPLOAD_DIR=/app/uploads) already live in backend/Dockerfile and are
+# deliberately not repeated here.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: local-ai-harness-backend:local
+    # Windows/macOS (Docker Desktop) already provide this hostname; on Linux it
+    # is created through the `host-gateway` mapping, which requires Docker
+    # support for it. This is how the container reaches a model server listening
+    # on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # The runtime image is node:22-slim with no curl/wget, so the existing
+      # Node runtime performs the check against the existing health endpoint.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:3000/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # Port 3000 is intentionally not published: the frontend proxy reaches the
+    # backend as `backend:3000` on the Compose network, and host health checks
+    # go through http://127.0.0.1:8080/api/health. To debug the backend
+    # directly, publish it with a local docker-compose.override.yml (documented
+    # in docs/docker.md) instead of changing this file.
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: local-ai-harness-frontend:local
+    ports:
+      - "8080:80"
+    # No depends_on: nginx resolves `backend` per request (see
+    # frontend/nginx.conf), so the UI stays available even when the backend is
+    # down and recovers without a frontend restart. The backend healthcheck
+    # above is for observability, not for startup ordering.

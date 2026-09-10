@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { testProviderConnection } from "../provider"
+import { API_BASE } from "../apiBase"
 import { FrontendApiError } from "../../types/error"
 
-// Mirrors the service default without hard-coding the CI-provided base URL.
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000"
+// The expected URL uses the service's own resolution rule (services/apiBase.ts)
+// instead of duplicating it, so it holds with or without a local `frontend/.env`
+// and in CI. The rule itself is covered by `apiBase.test.ts`.
 
 describe("testProviderConnection", () => {
   beforeEach(() => {
