@@ -1,7 +1,10 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 
 // https://vite.dev/config/
+//
+// The `test` block is consumed by Vitest; Vite ignores it during dev/build.
+// Keeping it here reuses the same plugin and dev-server proxy configuration.
 export default defineConfig({
   plugins: [vue()],
   server: {
@@ -11,5 +14,16 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts'],
+    setupFiles: ['src/__tests__/setup.ts'],
+    // Explicit imports only: tests import { describe, it, expect, vi, ... }
+    // from "vitest" rather than relying on global injection.
+    globals: false,
+    // Drop `vi.stubGlobal` replacements (e.g. `fetch`) after every test so a
+    // stubbed global cannot leak beyond the test that created it.
+    unstubGlobals: true,
   },
 })
