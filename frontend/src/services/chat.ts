@@ -90,6 +90,9 @@ export async function streamChat(
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let buffer = ""
+  // Tracks terminal completion so the normal EOF path does not invoke the
+  // completion callback a second time after a `done` SSE event already did.
+  let completed = false
 
   try {
     const requestBody: Record<string, unknown> = { messages, provider }
@@ -139,8 +142,12 @@ export async function streamChat(
         // If the stream was aborted, treat it as stopped
         if (options?.signal?.aborted) {
           callbacks.onStopped()
+        } else if (completed) {
+          // Terminal completion already handled by a `done` event above.
+          break
         } else {
           // Normal EOF without [DONE] — treat as done
+          completed = true
           callbacks.onDone()
         }
         break
@@ -215,6 +222,7 @@ function dispatchEvent(
         }
         break
       case "done":
+        completed = true
         callbacks.onDone()
         break
       case "error": {

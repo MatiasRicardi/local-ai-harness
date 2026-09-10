@@ -95,9 +95,10 @@ describe("streamChat", () => {
     expect(callbacks.onStart).toHaveBeenCalledWith("local-model", undefined)
     expect(callbacks.onDelta).toHaveBeenNthCalledWith(1, "Hel")
     expect(callbacks.onDelta).toHaveBeenNthCalledWith(2, "lo")
-    // A `done` event is followed by stream EOF, so the service is idempotent
-    // about completion — the consumer only needs to know it happened once.
-    expect(callbacks.onDone).toHaveBeenCalled()
+    // A `done` event is followed by stream EOF, so the service must not invoke
+    // the completion callback twice: the EOF path is skipped once a `done`
+    // event has already completed the stream.
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
     expect(callbacks.onError).not.toHaveBeenCalled()
     expect(callbacks.onStopped).not.toHaveBeenCalled()
   })
