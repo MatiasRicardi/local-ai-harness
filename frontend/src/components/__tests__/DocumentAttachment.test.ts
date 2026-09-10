@@ -16,10 +16,6 @@ function removeButton(wrapper: VueWrapper): HTMLButtonElement {
   return wrapper.find(".document-attachment-remove").element as HTMLButtonElement
 }
 
-function fileInput(wrapper: VueWrapper): HTMLInputElement {
-  return wrapper.find('input[type="file"]').element as HTMLInputElement
-}
-
 // Only the network call is stubbed; the real extension rules are reused so the
 // mocks cannot drift from `isSupportedExtension`.
 vi.mock("../../services/files", async (importOriginal) => {
@@ -44,10 +40,14 @@ function supportedFile(name = "notes.txt"): File {
 
 describe("DocumentAttachment", () => {
   let wrapper: VueWrapper
+  // Captured so tests can assert `resetInput()` actually assigns "", rather than
+  // relying on the file input's `.value` — which stays "" anyway because
+  // `selectFile` never assigns `.value`, making that check vacuous.
+  let valueSetter: ReturnType<typeof stubFileInputValueSetter>
 
   beforeEach(() => {
     vi.mocked(uploadDocument).mockReset()
-    stubFileInputValueSetter()
+    valueSetter = stubFileInputValueSetter()
   })
 
   afterEach(() => {
@@ -146,7 +146,7 @@ describe("DocumentAttachment", () => {
 
     await wrapper.find(".document-attachment-remove").trigger("click")
     expect(onRemove).toHaveBeenCalledTimes(1)
-    expect(fileInput(wrapper).value).toBe("")
+    expect(valueSetter).toHaveBeenCalledWith("")
   })
 
   it("rejects an unsupported file with UNSUPPORTED_FILE", async () => {
@@ -168,7 +168,7 @@ describe("DocumentAttachment", () => {
     expect(onError).toHaveBeenCalledTimes(1)
     const error = onError.mock.calls[0][0] as FrontendApiError
     expect(error.code).toBe("UNSUPPORTED_FILE")
-    expect(fileInput(wrapper).value).toBe("")
+    expect(valueSetter).toHaveBeenCalledWith("")
   })
 
   it("attaches the document when a supported file is selected", async () => {
