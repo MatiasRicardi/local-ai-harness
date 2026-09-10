@@ -128,6 +128,10 @@ export async function streamChat(
 
     reader = response.body.getReader()
     const decoder = new TextDecoder()
+    // The event under construction belongs to the whole stream, not to one read:
+    // a chunk boundary may fall between the `event:` and `data:` lines, and the
+    // event type has to survive until its data line completes it.
+    let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
     while (true) {
       const { done, value } = await reader.read()
 
@@ -147,8 +151,6 @@ export async function streamChat(
       // Process complete SSE events from buffer
       const lines = buffer.split("\n")
       buffer = lines.pop() || "" // Keep incomplete last line in buffer
-
-      let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
 
       for (const line of lines) {
         const trimmed = line.trim()
