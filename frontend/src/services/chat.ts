@@ -90,6 +90,9 @@ export async function streamChat(
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let buffer = ""
+  // Tracks terminal completion so the normal EOF path does not invoke the
+  // completion callback a second time after a `done` SSE event already did.
+  let completed = false
 
   try {
     const requestBody: Record<string, unknown> = { messages, provider }
@@ -139,8 +142,12 @@ export async function streamChat(
         // If the stream was aborted, treat it as stopped
         if (options?.signal?.aborted) {
           callbacks.onStopped()
+        } else if (completed) {
+          // Terminal completion already handled by a `done` event above.
+          break
         } else {
           // Normal EOF without [DONE] — treat as done
+          completed = true
           callbacks.onDone()
         }
         break
@@ -161,8 +168,9 @@ export async function streamChat(
           const data = trimmed.slice(6)
           if (currentEvent) {
             currentEvent.data = data
-            // Dispatch the event
-            dispatchEvent(currentEvent, callbacks)
+            // Dispatch the event and let a terminal (done) event mark the
+            // stream as completed within streamChat's scope.
+            completed = dispatchEvent(currentEvent, callbacks)
             currentEvent = null
           }
           // If there's no currentEvent, this is an unexpected "data:" line
@@ -194,7 +202,7 @@ export async function streamChat(
 function dispatchEvent(
   event: { type: "start" | "delta" | "done" | "error"; data: string },
   callbacks: StreamCallbacks,
-): void {
+): boolean {
   try {
     const parsed = JSON.parse(event.data) as {
       model?: string
@@ -216,16 +224,19 @@ function dispatchEvent(
         break
       case "done":
         callbacks.onDone()
-        break
+        return true
       case "error": {
         // Mid-stream provider error carrying the stable backend code.
         callbacks.onError(parseStreamErrorData(parsed))
         break
       }
     }
+    // Non-terminal event.
+    return false
   } catch {
     // Malformed JSON — log and skip without crashing
     // This ensures malformed events don't break the stream consumer
+    return false
   }
 }
 
