@@ -90,6 +90,9 @@ export async function streamChat(
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   let buffer = ""
+  // Tracks terminal completion so the normal EOF path does not invoke the
+  // completion callback a second time after a `done` SSE event already did.
+  let completed = false
 
   try {
     const requestBody: Record<string, unknown> = { messages, provider }
@@ -128,6 +131,10 @@ export async function streamChat(
 
     reader = response.body.getReader()
     const decoder = new TextDecoder()
+    // The event under construction belongs to the whole stream, not to one read:
+    // a chunk boundary may fall between the `event:` and `data:` lines, and the
+    // event type has to survive until its data line completes it.
+    let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
     while (true) {
       const { done, value } = await reader.read()
 
@@ -135,8 +142,12 @@ export async function streamChat(
         // If the stream was aborted, treat it as stopped
         if (options?.signal?.aborted) {
           callbacks.onStopped()
+        } else if (completed) {
+          // Terminal completion already handled by a `done` event above.
+          break
         } else {
           // Normal EOF without [DONE] — treat as done
+          completed = true
           callbacks.onDone()
         }
         break
@@ -148,8 +159,6 @@ export async function streamChat(
       const lines = buffer.split("\n")
       buffer = lines.pop() || "" // Keep incomplete last line in buffer
 
-      let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
-
       for (const line of lines) {
         const trimmed = line.trim()
         if (trimmed.startsWith("event: ")) {
@@ -159,8 +168,9 @@ export async function streamChat(
           const data = trimmed.slice(6)
           if (currentEvent) {
             currentEvent.data = data
-            // Dispatch the event
-            dispatchEvent(currentEvent, callbacks)
+            // Dispatch the event and let a terminal (done) event mark the
+            // stream as completed within streamChat's scope.
+            completed = dispatchEvent(currentEvent, callbacks)
             currentEvent = null
           }
           // If there's no currentEvent, this is an unexpected "data:" line
@@ -192,7 +202,7 @@ export async function streamChat(
 function dispatchEvent(
   event: { type: "start" | "delta" | "done" | "error"; data: string },
   callbacks: StreamCallbacks,
-): void {
+): boolean {
   try {
     const parsed = JSON.parse(event.data) as {
       model?: string
@@ -214,16 +224,19 @@ function dispatchEvent(
         break
       case "done":
         callbacks.onDone()
-        break
+        return true
       case "error": {
         // Mid-stream provider error carrying the stable backend code.
         callbacks.onError(parseStreamErrorData(parsed))
         break
       }
     }
+    // Non-terminal event.
+    return false
   } catch {
     // Malformed JSON — log and skip without crashing
     // This ensures malformed events don't break the stream consumer
+    return false
   }
 }
 

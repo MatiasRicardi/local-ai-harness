@@ -11,7 +11,9 @@
     "build:frontend": "pnpm --filter frontend build",
     "build": "pnpm run build:backend && pnpm run build:frontend",
     "typecheck": "pnpm --filter backend typecheck && pnpm --filter frontend typecheck",
-    "test": "pnpm --filter backend test",
+    "test:backend": "pnpm --filter backend test",
+    "test:frontend": "pnpm --filter frontend test",
+    "test": "pnpm test:backend && pnpm test:frontend",
     "lint": "pnpm --filter backend lint && pnpm --filter frontend lint",
     "format": "pnpm --filter backend format && pnpm --filter frontend format",
     "clean": "pnpm --filter backend clean && pnpm --filter frontend clean"
