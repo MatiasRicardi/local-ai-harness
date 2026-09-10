@@ -1,31 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../app.js";
-
-function mockFetchSuccess(response: unknown) {
-  return ((url: string, options: RequestInit) => {
-    expect(url).toContain("/chat/completions");
-    expect(options.method).toBe("POST");
-    const contentType = options.headers as Record<string, string> | undefined;
-    expect(contentType?.["Content-Type"]).toBe("application/json");
-    return response;
-  }) as unknown as typeof globalThis.fetch;
-}
-
-function mockFetchTimeout() {
-  return ((url: string, options: RequestInit) => {
-    expect(url).toContain("/chat/completions");
-    expect(options.method).toBe("POST");
-    const contentType = options.headers as Record<string, string> | undefined;
-    expect(contentType?.["Content-Type"]).toBe("application/json");
-    throw new DOMException("The operation timed out", "TimeoutError");
-  }) as unknown as typeof globalThis.fetch;
-}
-
-function mockFetchNetworkError() {
-  return (() => {
-    throw new TypeError("fetch failed");
-  }) as unknown as typeof globalThis.fetch;
-}
+import {
+  mockFetchSuccess,
+  mockFetchTimeout,
+  mockFetchNetworkError,
+} from "../test/provider-fakes.js";
 
 function mockFetchHttpError(status: number) {
   return ((url: string, _: RequestInit) => {

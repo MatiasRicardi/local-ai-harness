@@ -1,35 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../app.js";
+import {
+  mockFetchSuccess,
+  mockFetchTimeout,
+  mockFetchNetworkError,
+} from "../test/provider-fakes.js";
 
 // Capture the native fetch before any test replaces it. Tests that need a real
 // network connection (e.g. disconnect tests) reach the test server through it.
 const nativeFetch = globalThis.fetch;
-
-function mockFetchSuccess(response: unknown) {
-  return ((url: string, options: RequestInit) => {
-    expect(url).toContain("/chat/completions");
-    expect(options.method).toBe("POST");
-    const contentType = options.headers as Record<string, string> | undefined;
-    expect(contentType?.["Content-Type"]).toBe("application/json");
-    return response;
-  }) as unknown as typeof globalThis.fetch;
-}
-
-function mockFetchTimeout() {
-  return ((url: string, options: RequestInit) => {
-    expect(url).toContain("/chat/completions");
-    expect(options.method).toBe("POST");
-    const contentType = options.headers as Record<string, string> | undefined;
-    expect(contentType?.["Content-Type"]).toBe("application/json");
-    throw new DOMException("The operation timed out", "TimeoutError");
-  }) as unknown as typeof globalThis.fetch;
-}
-
-function mockFetchNetworkError() {
-  return (() => {
-    throw new TypeError("fetch failed");
-  }) as unknown as typeof globalThis.fetch;
-}
 
 describe("chat endpoint", () => {
   let app: ReturnType<typeof buildApp>;
@@ -980,6 +959,18 @@ describe("chat/stream endpoint", () => {
 
     let upstreamSignal: AbortSignal | undefined;
 
+    // Deferreds that make the disconnect test deterministic: one resolves when
+    // the mocked provider fetch has been registered, the other resolves when the
+    // upstream abort event fires. No fixed sleeps are used.
+    let resolveUpstreamRegistered: () => void;
+    const upstreamRegistered = new Promise<void>((resolve) => {
+      resolveUpstreamRegistered = resolve;
+    });
+    let resolveUpstreamAborted: () => void;
+    const upstreamAborted = new Promise<void>((resolve) => {
+      resolveUpstreamAborted = resolve;
+    });
+
     // Only intercept the provider call; let the client -> test-server call
     // reach the real network.
     const realFetch = nativeFetch;
@@ -989,16 +980,20 @@ describe("chat/stream endpoint", () => {
       }
       expect(url).toContain("/chat/completions");
       upstreamSignal = (options.signal as AbortSignal | undefined) ?? undefined;
+      resolveUpstreamRegistered();
       // Stay pending until the client disconnect aborts this request, so the
       // provider never sends headers before cancellation (pre-header path).
       return new Promise<Response>((_resolve, reject) => {
-        (options.signal as AbortSignal | undefined)?.addEventListener(
+        const signal = options.signal as AbortSignal | undefined;
+        signal?.addEventListener(
           "abort",
           () => {
+            resolveUpstreamAborted();
             reject(
               new DOMException("The operation was aborted.", "AbortError"),
             );
           },
+          { once: true },
         );
       });
     }) as unknown as typeof globalThis.fetch;
@@ -1033,10 +1028,8 @@ describe("chat/stream endpoint", () => {
     }
     expect(sawStart).toBe(true);
 
-    // Ensure the pending provider fetch has been registered.
-    while (!upstreamSignal) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    // Wait deterministically for the mocked provider fetch to be registered.
+    await upstreamRegistered;
     expect(upstreamSignal!.aborted).toBe(false);
 
     // Disconnect the client after the start event, while the provider request
@@ -1048,8 +1041,8 @@ describe("chat/stream endpoint", () => {
       // Aborting the connection rejects in-flight reads; that is expected.
     }
 
-    // Allow the server to observe the disconnect and propagate the abort.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait deterministically for the server to propagate the abort upstream.
+    await upstreamAborted;
 
     // The upstream provider request was aborted before headers arrived.
     expect(upstreamSignal!.aborted).toBe(true);
