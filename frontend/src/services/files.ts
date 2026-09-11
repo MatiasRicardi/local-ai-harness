@@ -1,4 +1,5 @@
 import { parseApiError } from "../utils/parseApiError"
+import { API_BASE } from "./apiBase"
 
 export interface AttachedDocument {
   fileId: string
@@ -34,8 +35,6 @@ export interface FileUploadError {
   success: false
   error: string
 }
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:3000"
 
 export function isSupportedExtension(filename: string): boolean {
   const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase()
