@@ -1,12 +1,13 @@
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
+import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 //
 // The `test` block is consumed by Vitest; Vite ignores it during dev/build.
 // Keeping it here reuses the same plugin and dev-server proxy configuration.
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), tailwindcss()],
   server: {
     proxy: {
       '/api': {

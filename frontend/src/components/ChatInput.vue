@@ -49,7 +49,7 @@ function handleEnter(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="chat-input">
+  <div class="chat-input flex items-end gap-2">
     <textarea
       v-model="text"
       :placeholder="computedPlaceholder"
@@ -58,12 +58,12 @@ function handleEnter(event: KeyboardEvent) {
       @keydown.meta.enter="handleSend"
       @keydown.enter="handleEnter"
       rows="3"
-      class="chat-input-textarea"
+      class="chat-input-textarea focus-ring max-h-52 min-h-14 flex-1 resize-y rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-base leading-relaxed text-neutral-900 placeholder:text-neutral-400 disabled:cursor-not-allowed disabled:opacity-60"
     />
     <button
       v-if="!sending"
       type="button"
-      class="chat-input-btn chat-input-send"
+      class="chat-input-btn chat-input-send focus-ring inline-flex shrink-0 items-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
       :disabled="sending"
       @click="handleSend"
     >
@@ -72,79 +72,10 @@ function handleEnter(event: KeyboardEvent) {
     <button
       v-else
       type="button"
-      class="chat-input-btn chat-input-stop"
+      class="chat-input-btn chat-input-stop focus-ring inline-flex shrink-0 items-center rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 transition-colors hover:border-red-300 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
       @click="emit('stop')"
     >
       Stop
     </button>
   </div>
 </template>
-
-<style scoped>
-.chat-input {
-  display: flex;
-  gap: 10px;
-  margin-top: auto;
-  padding-top: 12px;
-  align-items: flex-end;
-}
-
-.chat-input-textarea {
-  flex: 1;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.95rem;
-  line-height: 1.5;
-  resize: vertical;
-  min-height: 56px;
-  max-height: 200px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.chat-input-textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.15);
-}
-
-.chat-input-textarea:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.chat-input-btn {
-  padding: 12px 22px;
-  border: none;
-  border-radius: 10px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: opacity 0.2s;
-  flex-shrink: 0;
-}
-
-.chat-input-btn:hover {
-  opacity: 0.85;
-}
-
-.chat-input-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.chat-input-send {
-  background: var(--accent);
-  color: var(--bg);
-}
-
-.chat-input-stop {
-  background: #ef4444;
-  color: white;
-}
-</style>

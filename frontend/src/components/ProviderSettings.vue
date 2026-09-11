@@ -96,43 +96,46 @@ const handleTest = async () => {
 </script>
 
 <template>
-  <div class="provider-settings">
-    <h2>Provider Settings</h2>
-    <p class="storage-notice">Settings are stored locally in your browser.</p>
+  <div class="provider-settings flex flex-col gap-3">
+    <h2 class="m-0 text-sm font-semibold text-neutral-900">Provider Settings</h2>
+    <p class="storage-notice m-0 text-xs text-neutral-500">Settings are stored locally in your browser.</p>
 
-    <form @submit.prevent="handleTest" class="settings-form">
-      <div class="form-group">
-        <label for="provider-name">Provider Name</label>
+    <form @submit.prevent="handleTest" class="settings-form flex flex-col gap-3">
+      <div class="form-group flex flex-col gap-1">
+        <label for="provider-name" class="text-xs font-medium text-neutral-700">Provider Name</label>
         <input
           id="provider-name"
           v-model="state.name"
           type="text"
           placeholder="e.g. llama.cpp"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
       </div>
 
-      <div class="form-group">
-        <label for="base-url">Base URL</label>
+      <div class="form-group flex flex-col gap-1">
+        <label for="base-url" class="text-xs font-medium text-neutral-700">Base URL</label>
         <input
           id="base-url"
           v-model="state.baseUrl"
           type="url"
           placeholder="http://localhost:8080/v1"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
       </div>
 
-      <div class="form-group">
-        <label for="model">Model</label>
+      <div class="form-group flex flex-col gap-1">
+        <label for="model" class="text-xs font-medium text-neutral-700">Model</label>
         <input
           id="model"
           v-model="state.model"
           type="text"
           placeholder="local-model"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
       </div>
 
-      <div class="form-group">
-        <label for="context-size">Context Size (tokens)</label>
+      <div class="form-group flex flex-col gap-1">
+        <label for="context-size" class="text-xs font-medium text-neutral-700">Context Size (tokens)</label>
         <input
           id="context-size"
           v-model.number="state.contextSizeTokens"
@@ -140,23 +143,25 @@ const handleTest = async () => {
           min="1024"
           max="2000000"
           step="1024"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
-        <small class="helper">Approximate maximum context window supported by the configured model.</small>
+        <small class="helper text-xs font-normal text-neutral-500">Approximate maximum context window supported by the configured model.</small>
       </div>
 
-      <div class="form-group">
-        <label for="api-key">API Key (optional)</label>
+      <div class="form-group flex flex-col gap-1">
+        <label for="api-key" class="text-xs font-medium text-neutral-700">API Key (optional)</label>
         <input
           id="api-key"
           v-model="state.apiKey"
           type="password"
           placeholder="Leave blank if not required"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
-        <small class="warning">Your API key is stored in localStorage on this browser.</small>
+        <small class="warning text-xs text-amber-700">Your API key is stored in localStorage on this browser.</small>
       </div>
 
-      <div class="form-group">
-        <label for="timeout">Timeout (seconds)</label>
+      <div class="form-group flex flex-col gap-1">
+        <label for="timeout" class="text-xs font-medium text-neutral-700">Timeout (seconds)</label>
         <input
           id="timeout"
           v-model.number="state.timeout"
@@ -164,141 +169,31 @@ const handleTest = async () => {
           min="10"
           max="300"
           step="10"
+          class="focus-ring w-full rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-sm text-neutral-900 placeholder:text-neutral-400"
         />
       </div>
 
-      <div class="form-actions">
+      <div class="form-actions flex gap-2">
         <button
           type="submit"
-          class="btn btn-primary"
+          class="btn btn-primary focus-ring inline-flex items-center justify-center rounded-md bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
           :disabled="!state.baseUrl || !state.model || state.testing"
         >
           {{ state.testing ? "Testing..." : "Test Connection" }}
         </button>
       </div>
 
-      <div v-if="state.testing" class="status testing">
+      <div v-if="state.testing" class="status testing mt-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
         Testing connection to {{ state.baseUrl }}...
       </div>
 
-      <div v-else-if="state.status === 'success'" class="status success">
+      <div v-else-if="state.status === 'success'" class="status success mt-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
         <strong>Connected!</strong> {{ state.message }}
       </div>
 
-      <div v-else-if="state.status === 'error'" class="status error">
+      <div v-else-if="state.status === 'error'" class="status error mt-1 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
         <strong>Connection failed</strong> — {{ state.message }}
       </div>
     </form>
   </div>
 </template>
-
-<style scoped>
-.provider-settings {
-  padding: 1rem;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  background: #fafafa;
-}
-
-.provider-settings h2 {
-  margin-top: 0;
-  font-size: 1.1rem;
-}
-
-.storage-notice {
-  font-size: 0.85rem;
-  color: #666;
-  margin-bottom: 1rem;
-}
-
-.settings-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.form-group label {
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.form-group input {
-  padding: 0.4rem 0.5rem;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  font-size: 0.9rem;
-}
-
-.form-group input:focus {
-  outline: none;
-  border-color: #4a90d9;
-  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.2);
-}
-
-.form-group small {
-  color: #e67e22;
-  font-size: 0.75rem;
-}
-
-.form-group .helper {
-  color: #666;
-  font-size: 0.75rem;
-  font-weight: normal;
-}
-
-.form-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.btn {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-.btn-primary {
-  background: #4a90d9;
-  color: #fff;
-}
-
-.btn-primary:disabled {
-  background: #aaa;
-  cursor: not-allowed;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: #3a7bc8;
-}
-
-.status {
-  padding: 0.5rem 0.75rem;
-  border-radius: 4px;
-  font-size: 0.85rem;
-  margin-top: 0.5rem;
-}
-
-.status.testing {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.status.success {
-  background: #d4edda;
-  color: #155724;
-}
-
-.status.error {
-  background: #f8d7da;
-  color: #721c24;
-}
-</style>

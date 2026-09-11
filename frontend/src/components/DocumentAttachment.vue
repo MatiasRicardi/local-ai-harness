@@ -102,24 +102,31 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="document-attachment">
+  <div class="document-attachment flex flex-col gap-2">
     <input
       ref="fileInputRef"
       type="file"
       accept=".txt,.md,.pdf"
-      class="document-attachment-input"
+      class="document-attachment-input hidden"
       @change="handleFileChange"
       aria-label="Attach document"
     />
 
-    <div class="document-attachment-info">
-      <div v-if="uploading" class="document-attachment-uploading">
+    <div class="document-attachment-info flex flex-col gap-2">
+      <div
+        v-if="uploading"
+        class="document-attachment-uploading flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-500"
+      >
+        <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden="true"></span>
         Uploading document...
       </div>
-      <div v-if="attachedDocument" class="document-attachment-meta">
-        <span class="document-attachment-filename">{{ attachedDocument.originalFilename }}</span>
-        <span class="document-attachment-status">Ready</span>
-        <span class="document-attachment-details">
+      <div
+        v-if="attachedDocument"
+        class="document-attachment-meta flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2"
+      >
+        <span class="document-attachment-filename min-w-0 truncate text-sm font-medium text-neutral-900">{{ attachedDocument.originalFilename }}</span>
+        <span class="document-attachment-status text-xs font-medium text-emerald-700">Ready</span>
+        <span class="document-attachment-details text-xs text-neutral-500">
           {{ attachedDocument.characterCount.toLocaleString() }} characters
           <template v-if="attachedDocument.pageCount !== undefined">
             · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
@@ -129,21 +136,21 @@ const emit = defineEmits<{
 
       <div
         v-if="attachedDocument && attachedDocument.warnings.length > 0"
-        class="document-attachment-warnings"
+        class="document-attachment-warnings flex flex-col gap-0.5"
       >
         <div
           v-for="(warning, index) in attachedDocument.warnings"
           :key="index"
-          class="document-attachment-warning"
+          class="document-attachment-warning text-xs text-amber-700"
         >
           Warning: {{ warning }}
         </div>
       </div>
 
-      <div class="document-attachment-actions">
+      <div class="document-attachment-actions flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="document-attachment-btn"
+          class="document-attachment-btn focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:border-sky-500 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleButtonClick"
           :aria-label="attachedDocument ? 'Replace document' : 'Attach document'"
@@ -153,7 +160,7 @@ const emit = defineEmits<{
         <button
           v-if="attachedDocument"
           type="button"
-          class="document-attachment-remove"
+          class="document-attachment-remove focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:border-red-300 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleRemove"
           aria-label="Remove attached document"
@@ -164,121 +171,3 @@ const emit = defineEmits<{
     </div>
   </div>
 </template>
-
-<style scoped>
-.document-attachment {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.document-attachment-input {
-  display: none;
-}
-
-.document-attachment-btn {
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: border-color 0.2s, opacity 0.2s;
-}
-
-.document-attachment-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.document-attachment-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.document-attachment-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  flex: 1;
-  min-width: 0;
-}
-
-.document-attachment-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.document-attachment-filename {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text-h);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.document-attachment-status {
-  font-size: 0.75rem;
-  color: #16a34a;
-  font-weight: 500;
-}
-
-.document-attachment-details {
-  font-size: 0.78rem;
-  color: var(--text);
-  opacity: 0.7;
-}
-
-.document-attachment-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 2px;
-}
-
-.document-attachment-warning {
-  font-size: 0.75rem;
-  color: #d97706;
-}
-
-.document-attachment-remove {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: border-color 0.2s, opacity 0.2s;
-  flex-shrink: 0;
-}
-
-.document-attachment-remove:hover {
-  border-color: #ef4444;
-  color: #ef4444;
-}
-
-.document-attachment-uploading {
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  font-size: 0.85rem;
-  color: var(--text);
-  opacity: 0.7;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 38px;
-}
-</style>

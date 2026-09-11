@@ -1,0 +1,26 @@
+/* Global stylesheet: Tailwind v4 entry point for the application. */
+
+@import "tailwindcss";
+@import "./markdown.css";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Shared focus treatment for interactive controls (inputs, buttons, links). */
+@utility focus-ring {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2;
+}
+
+@layer base {
+  html {
+    /* Keep native controls light: this build intentionally has no dark mode. */
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-white font-sans text-sm text-neutral-900 antialiased;
+  }
+}

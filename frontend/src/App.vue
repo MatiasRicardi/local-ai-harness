@@ -289,39 +289,65 @@ async function handleSend(text: string) {
 </script>
 
 <template>
-  <div id="app">
-    <header class="header">
-      <h1 class="header-title">Local AI Harness</h1>
+  <div id="app" class="flex min-h-dvh flex-col bg-white text-neutral-900 lg:h-dvh lg:overflow-hidden">
+    <header
+      class="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3 lg:px-6"
+    >
+      <h1 class="text-base font-semibold tracking-tight text-neutral-900">Local AI Harness</h1>
       <button
         type="button"
-        class="header-new-conversation"
+        class="header-new-conversation focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:border-sky-500 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Start a new conversation"
         @click="handleReset"
       >
         New conversation
       </button>
     </header>
-    <main class="main">
-      <ProviderSettings />
-      <section class="chat-panel">
-        <div class="chat-inner">
-          <ChatMessages
-            :messages="messages"
-            :loading="loading"
-            :error="chatError"
-            :stopped="stopped"
-          />
-          <div v-if="documentContextWarning" class="document-context-warning">
-            <span class="warning-icon">⚠️</span>
-            {{ documentContextWarning }}
+    <main class="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
+      <aside
+        class="shrink-0 border-b border-neutral-200 bg-neutral-50 p-4 lg:w-80 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
+      >
+        <ProviderSettings />
+      </aside>
+      <section class="flex min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
+        <div class="chat-inner mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 lg:min-h-0 lg:px-6">
+          <div class="flex min-h-0 flex-1 flex-col gap-3 pb-4 pt-4 lg:overflow-y-auto">
+            <ChatMessages
+              :messages="messages"
+              :loading="loading"
+              :error="chatError"
+              :stopped="stopped"
+            />
+            <div
+              v-if="documentContextWarning"
+              class="document-context-warning flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+            >
+              <svg
+                class="size-3.5 shrink-0"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M8.485 2.495c.673-1.167 2.39-1.167 3.064 0l6.28 10.875c.673 1.167-.17 2.625-1.534 2.625H3.74c-1.364 0-2.207-1.458-1.534-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+              <span>{{ documentContextWarning }}</span>
+            </div>
+            <div ref="messagesEnd" />
           </div>
-          <div ref="messagesEnd" />
-          <div class="composer-container">
-            <div v-if="attachmentError" class="attachment-error" role="alert">
-              <span class="attachment-error-message">{{ attachmentError.message }}</span>
+          <div class="composer-container flex shrink-0 flex-col gap-3 border-t border-neutral-200 py-3">
+            <div
+              v-if="attachmentError"
+              class="attachment-error flex flex-col gap-0.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700"
+              role="alert"
+            >
+              <span class="attachment-error-message text-sm font-medium">{{ attachmentError.message }}</span>
               <span
                 v-if="attachmentError.detail"
-                class="attachment-error-detail"
+                class="attachment-error-detail text-xs text-red-600"
               >{{ attachmentError.detail }}</span>
             </div>
             <DocumentAttachment
@@ -348,126 +374,3 @@ async function handleSend(text: string) {
     </main>
   </div>
 </template>
-
-<style scoped>
-#app {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-}
-
-.header {
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.header-title {
-  margin: 0;
-  font-size: 20px;
-  color: var(--text-h);
-}
-
-.header-new-conversation {
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color 0.2s, color 0.2s;
-}
-
-.header-new-conversation:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.header-new-conversation:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.main {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
-.connection-panel {
-  flex: 1;
-  padding: 24px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-}
-
-.chat-panel {
-  flex: 1;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-}
-
-.chat-inner {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  max-width: 860px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 0 16px;
-  gap: 16px;
-}
-
-.composer-container {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 12px;
-  margin-top: auto;
-}
-
-.document-context-warning {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
-.attachment-error {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--error, #ef4444);
-  border-radius: 6px;
-  color: var(--text, #b91c1c);
-  font-size: 13px;
-}
-
-.attachment-error-message {
-  font-weight: 600;
-}
-
-.attachment-error-detail {
-  font-size: 12px;
-  opacity: 0.8;
-}
-
-.warning-icon {
-  font-size: 16px;
-}
-</style>
