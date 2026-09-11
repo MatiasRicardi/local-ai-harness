@@ -19,10 +19,10 @@ src/
 ├── components/    # Vue components
 ├── composables/   # Vue composition utilities
 ├── services/      # API and external service calls
+├── styles/        # Global Tailwind entry and Markdown output styles
 ├── types/         # TypeScript type definitions
 ├── App.vue        # Root component
-├── main.ts        # Application entry point
-└── style.css      # Global styles
+└── main.ts        # Application entry point
 ```
 
 ## Scripts
