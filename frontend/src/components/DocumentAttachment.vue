@@ -102,7 +102,8 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="document-attachment flex flex-col gap-2">
+  <!-- Compact toolbar rendered at the top of the composer card. -->
+  <div class="document-attachment flex min-w-0 flex-col gap-1">
     <input
       ref="fileInputRef"
       type="file"
@@ -112,55 +113,80 @@ const emit = defineEmits<{
       aria-label="Attach document"
     />
 
-    <div class="document-attachment-info flex flex-col gap-2">
-      <div
-        v-if="uploading"
-        class="document-attachment-uploading flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-500"
-      >
-        <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden="true"></span>
-        Uploading document...
-      </div>
-      <div
+    <div class="document-attachment-info flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+      <span
         v-if="attachedDocument"
-        class="document-attachment-meta flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2"
+        class="document-attachment-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md border border-stone-200/70 bg-stone-50 px-2 py-1 text-[0.6875rem]"
       >
-        <span class="document-attachment-filename min-w-0 truncate text-sm font-medium text-neutral-900">{{ attachedDocument.originalFilename }}</span>
-        <span class="document-attachment-status text-xs font-medium text-emerald-700">Ready</span>
-        <span class="document-attachment-details text-xs text-neutral-500">
+        <svg
+          class="size-3 shrink-0 text-sky-600"
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 2.5h6l3 3v12H6z" />
+          <path d="M12 2.5V6h3" />
+        </svg>
+        <span class="document-attachment-filename max-w-[14rem] truncate font-medium text-stone-700">{{ attachedDocument.originalFilename }}</span>
+        <span class="document-attachment-status font-medium text-emerald-600">Ready</span>
+        <span class="document-attachment-details text-stone-400">
           {{ attachedDocument.characterCount.toLocaleString() }} characters
           <template v-if="attachedDocument.pageCount !== undefined">
             · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
           </template>
         </span>
+      </span>
+
+      <div
+        v-if="uploading"
+        class="document-attachment-uploading flex items-center gap-1.5 rounded-md border border-stone-200/70 bg-stone-50 px-2 py-1 text-[0.6875rem] text-stone-500"
+      >
+        <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden="true"></span>
+        Uploading document...
       </div>
 
       <div
         v-if="attachedDocument && attachedDocument.warnings.length > 0"
-        class="document-attachment-warnings flex flex-col gap-0.5"
+        class="document-attachment-warnings flex w-full flex-col gap-0.5"
       >
         <div
           v-for="(warning, index) in attachedDocument.warnings"
           :key="index"
-          class="document-attachment-warning text-xs text-amber-700"
+          class="document-attachment-warning text-[0.6875rem] text-amber-700"
         >
           Warning: {{ warning }}
         </div>
       </div>
 
-      <div class="document-attachment-actions flex flex-wrap items-center gap-2">
+      <div class="document-attachment-actions flex flex-wrap items-center gap-1">
         <button
           type="button"
-          class="document-attachment-btn focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:border-sky-500 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+          class="document-attachment-btn focus-ring-inset inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-stone-600 transition-colors duration-150 hover:bg-stone-100 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleButtonClick"
           :aria-label="attachedDocument ? 'Replace document' : 'Attach document'"
         >
+          <svg
+            class="size-3 shrink-0"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M6 2.5h6l3 3v12H6z" />
+            <path d="M12 2.5V6h3" />
+          </svg>
           {{ attachedDocument ? "Replace" : "Attach document" }}
         </button>
         <button
           v-if="attachedDocument"
           type="button"
-          class="document-attachment-remove focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:border-red-300 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          class="document-attachment-remove focus-ring-inset inline-flex shrink-0 items-center rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-stone-500 transition-colors duration-150 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleRemove"
           aria-label="Remove attached document"
