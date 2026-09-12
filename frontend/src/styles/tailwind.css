@@ -9,9 +9,21 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* Shared focus treatment for interactive controls (inputs, buttons, links). */
+/* Shared focus treatment for interactive controls on white surfaces. */
 @utility focus-ring {
   @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2;
+}
+
+/* Inset variant for controls on tinted (stone) surfaces, where an offset ring
+ * would pick up the wrong background colour. */
+@utility focus-ring-inset {
+  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-inset;
+}
+
+/* Faint dotted texture behind the conversation workspace. */
+@utility chat-dots {
+  background-image: radial-gradient(circle, rgb(120 113 108 / 0.06) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 @layer base {
@@ -20,7 +32,37 @@
     color-scheme: light;
   }
 
+  ::selection {
+    @apply bg-sky-100 text-sky-900;
+  }
+
   body {
-    @apply bg-white font-sans text-sm text-neutral-900 antialiased;
+    @apply bg-stone-50 font-sans text-sm text-stone-800 antialiased;
+  }
+}
+
+/* Thin, low-contrast scrollbars for the independently scrolling panes. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-stone-300) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: var(--color-stone-300);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-stone-400);
   }
 }

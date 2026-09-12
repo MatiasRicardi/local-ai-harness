@@ -40,6 +40,25 @@ const attachmentResetVersion = ref(0)
 
 const providerSettings = useProviderSettings()
 
+// Presentation-only summaries. They describe what the user configured, never a
+// live connection state (that stays inside ProviderSettings' Test Connection).
+const configuredModel = computed(() => providerSettings.value.model.trim())
+
+const endpointSummary = computed(() => {
+  const { name, baseUrl } = providerSettings.value
+  // Drop the scheme and any trailing slash: purely cosmetic, no inference.
+  const host = baseUrl
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .replace(/\/+$/, "")
+  return { name: name.trim(), host }
+})
+
+const configuredContext = computed(() => {
+  const tokens = providerSettings.value.contextSizeTokens
+  return Number.isFinite(tokens) ? tokens.toLocaleString() : ""
+})
+
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
   messagesEnd.value?.scrollIntoView({ behavior })
 }
@@ -289,29 +308,86 @@ async function handleSend(text: string) {
 </script>
 
 <template>
-  <div id="app" class="flex min-h-dvh flex-col bg-white text-neutral-900 lg:h-dvh lg:overflow-hidden">
+  <div id="app" class="flex min-h-dvh flex-col bg-white text-stone-800 lg:h-dvh lg:overflow-hidden">
+    <!-- Full-width header: app identity, configured model, endpoint summary, reset. -->
     <header
-      class="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3 lg:px-6"
+      class="header flex h-14 shrink-0 items-center justify-between gap-3 border-b border-stone-200/80 bg-white/90 px-4 backdrop-blur-md md:px-5"
     >
-      <h1 class="text-base font-semibold tracking-tight text-neutral-900">Local AI Harness</h1>
-      <button
-        type="button"
-        class="header-new-conversation focus-ring inline-flex shrink-0 items-center rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 transition-colors hover:border-sky-500 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-        aria-label="Start a new conversation"
-        @click="handleReset"
-      >
-        New conversation
-      </button>
+      <div class="flex min-w-0 items-center gap-3">
+        <div
+          class="app-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-sm shadow-sky-500/20"
+        >
+          <svg
+            class="size-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.9"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="7" y="7" width="10" height="10" rx="2.5" />
+            <path d="M10.5 10.5h3v3h-3z" fill="currentColor" stroke="none" />
+            <path d="M9.5 4v3M12 4v3M14.5 4v3M9.5 17v3M12 17v3M14.5 17v3M4 9.5h3M4 12h3M4 14.5h3M17 9.5h3M17 12h3M17 14.5h3" />
+          </svg>
+        </div>
+        <div class="flex min-w-0 items-center gap-2.5">
+          <h1 class="truncate text-sm font-semibold tracking-tight text-stone-900">Local AI Harness</h1>
+          <!-- Decorative separator: the badge is the configured model, not a status. -->
+          <span v-if="configuredModel" class="text-stone-300" aria-hidden="true">/</span>
+          <span
+            v-if="configuredModel"
+            class="model-badge hidden min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[0.6875rem] font-medium text-stone-700 sm:flex"
+            :title="configuredModel"
+          >
+            <span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
+            <span class="truncate font-mono">{{ configuredModel }}</span>
+          </span>
+        </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-3">
+        <div
+          v-if="endpointSummary.host"
+          class="endpoint-summary hidden min-w-0 items-center gap-1 rounded-md border border-stone-200/50 bg-stone-100/80 px-2.5 py-1 text-xs text-stone-400 lg:flex"
+        >
+          <template v-if="endpointSummary.name">
+            <span class="max-w-[10rem] min-w-0 truncate font-mono text-[0.6875rem]">{{ endpointSummary.name }}</span>
+            <span class="text-stone-300" aria-hidden="true">&bull;</span>
+          </template>
+          <span class="max-w-[14rem] min-w-0 truncate">{{ endpointSummary.host }}</span>
+        </div>
+        <button
+          type="button"
+          class="header-new-conversation focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3.5 py-1.5 text-xs font-medium text-stone-700 shadow-sm transition-colors duration-150 hover:bg-stone-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label="Start a new conversation"
+          @click="handleReset"
+        >
+          <svg
+            class="size-3.5 shrink-0 text-stone-400"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M10 4.5v11M4.5 10h11" />
+          </svg>
+          <span>New conversation</span>
+        </button>
+      </div>
     </header>
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
+      <!-- Sidebar: stacks above the chat on narrow viewports, scrolls on its own on desktop. -->
       <aside
-        class="shrink-0 border-b border-neutral-200 bg-neutral-50 p-4 lg:w-80 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
+        class="sidebar shrink-0 border-b border-stone-200/75 bg-stone-50 lg:min-h-0 lg:w-88 lg:overflow-y-auto lg:border-b-0 lg:border-r"
       >
         <ProviderSettings />
       </aside>
-      <section class="flex min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
-        <div class="chat-inner mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 lg:min-h-0 lg:px-6">
-          <div class="flex min-h-0 flex-1 flex-col gap-3 pb-4 pt-4 lg:overflow-y-auto">
+      <section class="chat-area flex min-w-0 flex-1 flex-col bg-white lg:min-h-0 lg:overflow-hidden">
+        <!-- Message stream: the only scrolling pane on desktop. -->
+        <div class="chat-stream chat-dots min-h-0 flex-1 lg:overflow-y-auto">
+          <div class="chat-inner mx-auto flex w-full max-w-4xl flex-col px-4 pb-6 pt-6 md:px-8">
             <ChatMessages
               :messages="messages"
               :loading="loading"
@@ -320,47 +396,68 @@ async function handleSend(text: string) {
             />
             <div
               v-if="documentContextWarning"
-              class="document-context-warning flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700"
+              class="document-context-warning mt-4 flex items-start gap-2 rounded-xl border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-xs text-amber-700"
             >
               <svg
                 class="size-3.5 shrink-0"
                 viewBox="0 0 20 20"
-                fill="currentColor"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
                 aria-hidden="true"
               >
-                <path
-                  fill-rule="evenodd"
-                  d="M8.485 2.495c.673-1.167 2.39-1.167 3.064 0l6.28 10.875c.673 1.167-.17 2.625-1.534 2.625H3.74c-1.364 0-2.207-1.458-1.534-2.625L8.485 2.495ZM10 6a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 6Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
-                  clip-rule="evenodd"
-                />
+                <path d="M10 3.5 18 17H2z" />
+                <path d="M10 8.2v3.4" />
+                <path d="M10 14h.01" />
               </svg>
               <span>{{ documentContextWarning }}</span>
             </div>
             <div ref="messagesEnd" />
           </div>
-          <div class="composer-container flex shrink-0 flex-col gap-3 border-t border-neutral-200 py-3">
+        </div>
+        <!-- Composer dock: in normal document flow on narrow screens, pinned to the
+             bottom of the workspace on desktop (the stream above scrolls alone). -->
+        <div class="composer-dock shrink-0 border-t border-stone-200/70 bg-white px-4 py-4 md:px-6">
+          <div
+            class="composer-card mx-auto w-full max-w-3xl rounded-2xl border border-stone-200 bg-white p-2.5 shadow-lg shadow-stone-200/40 transition-all focus-within:border-sky-500 focus-within:ring-2 focus-within:ring-sky-100"
+          >
+            <div
+              class="composer-toolbar flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-stone-100 px-1.5 pb-2"
+            >
+              <DocumentAttachment
+                class="min-w-0 flex-1"
+                :attached-document="attachedDocument"
+                :uploading="uploadingDocument"
+                :reset-version="attachmentResetVersion"
+                @attempt="handleUploadAttempt"
+                @attach="handleAttach"
+                @remove="handleRemove"
+                @error="handleUploadError"
+                @upload:start="handleUploadStart"
+                @upload:end="handleUploadEnd"
+              />
+              <!-- Only the configured window is known: token usage is not reported. -->
+              <div
+                v-if="configuredContext"
+                class="composer-context flex shrink-0 items-center gap-1 font-mono text-[0.6875rem] text-stone-400"
+              >
+                <span>Context:</span>
+                <span class="font-medium text-stone-600">{{ configuredContext }}</span>
+              </div>
+            </div>
             <div
               v-if="attachmentError"
-              class="attachment-error flex flex-col gap-0.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-red-700"
+              class="attachment-error mt-2 flex flex-col gap-0.5 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2 text-red-700"
               role="alert"
             >
-              <span class="attachment-error-message text-sm font-medium">{{ attachmentError.message }}</span>
+              <span class="attachment-error-message text-xs font-medium">{{ attachmentError.message }}</span>
               <span
                 v-if="attachmentError.detail"
-                class="attachment-error-detail text-xs text-red-600"
+                class="attachment-error-detail text-[0.6875rem] text-red-600"
               >{{ attachmentError.detail }}</span>
             </div>
-            <DocumentAttachment
-              :attached-document="attachedDocument"
-              :uploading="uploadingDocument"
-              :reset-version="attachmentResetVersion"
-              @attempt="handleUploadAttempt"
-              @attach="handleAttach"
-              @remove="handleRemove"
-              @error="handleUploadError"
-              @upload:start="handleUploadStart"
-              @upload:end="handleUploadEnd"
-            />
             <ChatInput
               :on-send="handleSend"
               :sending="sending"

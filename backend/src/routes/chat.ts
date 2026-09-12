@@ -214,17 +214,11 @@ const chat: FastifyPluginAsync = async (server) => {
       : undefined;
     const allMessages = buildAllMessages(documentForMessages, messages);
 
-    // Create AbortController for client disconnect detection
-    const cleanupController = new AbortController();
+    // Fastify 5 exposes request.signal, an AbortSignal that aborts automatically
+    // when the client disconnects. Use it for upstream cancellation so we never
+    // call AbortController.abort() ourselves (which throws a DOMException on some
+    // Node versions, e.g. v26, and can crash the process during teardown).
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-
-    // Detect client disconnect and abort upstream
-    reply.sse.onClose(() => {
-      cleanupController.abort();
-      if (reader) {
-        void reader.cancel();
-      }
-    });
 
     // Build start event data (include context metadata only when truncation occurred)
     const startEventData: { model: string; context?: ContextTruncationMetadata } = {
@@ -241,8 +235,7 @@ const chat: FastifyPluginAsync = async (server) => {
     });
 
     try {
-      // Get the streaming response from the provider. The timeout signal is owned
-      // by the client; cleanupController.signal lets reply.sse.onClose() abort the
+      // Get the streaming response from the provider. request.signal aborts the
       // upstream request as soon as the client disconnects (before headers arrive).
       const stream = await client.chatStream(
         {
@@ -252,19 +245,19 @@ const chat: FastifyPluginAsync = async (server) => {
           timeoutMs: provider.timeoutMs,
         },
         allMessages,
-        { signal: cleanupController.signal },
+        { signal: request.signal },
       );
 
       // Get the reader from the stream
       reader = stream.getReader();
 
-      // Create SSE parser with cleanup signal
-      const parser = new SseParser({ signal: cleanupController.signal });
+      // Create SSE parser with the client-connection signal
+      const parser = new SseParser({ signal: request.signal });
 
       // Stream events from the parser to the response
       for await (const event of parser.parse(reader)) {
         // If client disconnected, stop streaming
-        if (cleanupController.signal.aborted) {
+        if (request.signal.aborted) {
           break;
         }
 
@@ -291,7 +284,7 @@ const chat: FastifyPluginAsync = async (server) => {
       }
     } catch (error) {
       // If client disconnected (user Stop/cancel), stay silent — no error event
-      if (cleanupController.signal.aborted) {
+      if (request.signal.aborted) {
         return;
       }
 
