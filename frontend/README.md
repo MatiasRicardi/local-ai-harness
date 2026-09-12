@@ -2,15 +2,11 @@
 
 Vue 3 + TypeScript + Vite frontend for the Local AI Harness application.
 
-> ⚠️ **Project in development — Reference code** ⚠️
+> Local AI Harness is a local, single-user developer tool. It is not intended as a hardened multi-user production service.
 
 ## 🧠 Purpose
 
-This frontend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 35B**.
-
-### ⚠️ Warning
-
-This code may contain bugs and is not suitable for production. It is under continuous development.
+Renders the chat interface: provider settings, streamed responses, document attachment, and conversation management. API calls go through the same-origin `/api` proxy (Vite in development, nginx in Docker).
 
 ## Project Structure
 

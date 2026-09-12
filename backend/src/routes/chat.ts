@@ -214,11 +214,28 @@ const chat: FastifyPluginAsync = async (server) => {
       : undefined;
     const allMessages = buildAllMessages(documentForMessages, messages);
 
-    // Fastify 5 exposes request.signal, an AbortSignal that aborts automatically
-    // when the client disconnects. Use it for upstream cancellation so we never
-    // call AbortController.abort() ourselves (which throws a DOMException on some
-    // Node versions, e.g. v26, and can crash the process during teardown).
+    // Cancellation signal for the upstream provider request, driven by the client
+    // connection. Fastify's `request.signal` cannot be used here: it is wired to the
+    // IncomingMessage 'close' event, and on Node v26 that event fires as soon as the
+    // request body has been consumed (`req.aborted === false`), so the signal is
+    // already aborted when the handler starts and never reflects a real disconnect.
+    // The response object does report disconnects correctly: 'close' before the
+    // response ended means the client went away.
+    const clientDisconnect = new AbortController();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+    if (reply.raw.destroyed && !reply.raw.writableEnded) {
+      // Client already gone before we could register the listener.
+      clientDisconnect.abort();
+    } else {
+      reply.raw.once("close", () => {
+        // Ignore the normal end-of-response close.
+        if (reply.raw.writableEnded || clientDisconnect.signal.aborted) {
+          return;
+        }
+        clientDisconnect.abort();
+      });
+    }
 
     // Build start event data (include context metadata only when truncation occurred)
     const startEventData: { model: string; context?: ContextTruncationMetadata } = {
@@ -235,7 +252,7 @@ const chat: FastifyPluginAsync = async (server) => {
     });
 
     try {
-      // Get the streaming response from the provider. request.signal aborts the
+      // Get the streaming response from the provider. clientDisconnect aborts the
       // upstream request as soon as the client disconnects (before headers arrive).
       const stream = await client.chatStream(
         {
@@ -245,19 +262,19 @@ const chat: FastifyPluginAsync = async (server) => {
           timeoutMs: provider.timeoutMs,
         },
         allMessages,
-        { signal: request.signal },
+        { signal: clientDisconnect.signal },
       );
 
       // Get the reader from the stream
       reader = stream.getReader();
 
       // Create SSE parser with the client-connection signal
-      const parser = new SseParser({ signal: request.signal });
+      const parser = new SseParser({ signal: clientDisconnect.signal });
 
       // Stream events from the parser to the response
       for await (const event of parser.parse(reader)) {
         // If client disconnected, stop streaming
-        if (request.signal.aborted) {
+        if (clientDisconnect.signal.aborted) {
           break;
         }
 
@@ -284,7 +301,7 @@ const chat: FastifyPluginAsync = async (server) => {
       }
     } catch (error) {
       // If client disconnected (user Stop/cancel), stay silent — no error event
-      if (request.signal.aborted) {
+      if (clientDisconnect.signal.aborted) {
         return;
       }
 
