@@ -42,7 +42,7 @@ curl -i http://127.0.0.1:8080/api/health
 ```
 
 ```json
-{"status":"ok","name":"Local AI Harness","version":"0.0.0"}
+{"status":"ok","name":"Local AI Harness","version":"1.0.0"}
 ```
 
 Stop everything:
