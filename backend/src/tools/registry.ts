@@ -39,9 +39,10 @@ export class MapToolRegistry implements ToolRegistry {
   }
 
   listDefinitions(): ToolDefinition[] {
-    // Fresh array of references only (definitions are immutable contracts);
-    // never return the internal Map or a reusable array.
-    return Array.from(this.tools.values()).map((tool) => tool.definition);
+    // Return a fresh array of deep-cloned definitions. Callers may mutate the
+    // returned objects; cloning (including nested inputSchema) keeps the
+    // stored definitions untouched so later calls stay stable.
+    return Array.from(this.tools.values()).map((tool) => structuredClone(tool.definition));
   }
 }
 

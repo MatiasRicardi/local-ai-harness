@@ -128,6 +128,28 @@ describe("createToolRegistry", () => {
     expect(registry.listDefinitions()).toEqual([]);
     expect(registry.get("anything")).toBeUndefined();
   });
+
+  it("registers a tool through the factory result", () => {
+    const registry = createToolRegistry();
+
+    expect(() => registry.register(buildTool(SEARCH_DEFINITION))).not.toThrow();
+    expect(registry.get("web_search")).toBeDefined();
+  });
+});
+
+describe("MapToolRegistry.listDefinitions deep clone", () => {
+  it("returns deep-cloned definitions that survive nested inputSchema mutation", () => {
+    const registry = createToolRegistry();
+    registry.register(buildTool(SEARCH_DEFINITION));
+
+    const first = registry.listDefinitions();
+    // Mutating a nested inputSchema value must not affect later calls.
+    (first[0].inputSchema.properties as { query: unknown }).query = "injected";
+
+    const second = registry.listDefinitions();
+    expect(second).toEqual([SEARCH_DEFINITION]);
+    expect(second[0].inputSchema.properties).not.toBe(first[0].inputSchema.properties);
+  });
 });
 
 // ── validation failure maps into the existing error model ─────────────────────

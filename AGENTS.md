@@ -55,7 +55,7 @@ Backend deps worth knowing: `@fastify/cors`, `@fastify/multipart`, `@fastify/sse
 
 Backend env vars (prefix `AI_`): `HOST`, `PORT`, `CORS_ORIGINS`, `REQUEST_TIMEOUT_MS`, `MAX_UPLOAD_SIZE_MB`, `UPLOAD_DIR`, `DEFAULT_PROVIDER_TIMEOUT_MS`, `TEMP_FILE_MAX_AGE_MS`, `ENVIRONMENT`.
 
-`backend/src/config/env.ts` is the **source of truth** for defaults, types and validation — read it instead of trusting this file, and report drift instead of copying values. `.env.example` does not list `AI_TEMP_FILE_MAX_AGE_MS`.
+`backend/src/config/env.ts` is the **source of truth** for defaults, types and validation — read it instead of trusting this file, and report drift instead of copying values. `backend/.env.example` documents `AI_TEMP_FILE_MAX_AGE_MS` with the matching 24-hour default of `86400000`.
 
 Frontend: `VITE_API_URL` is an **optional build-time** value inlined into the bundle. Unset (default) = same-origin `/api/...`, proxied by the Vite dev server or nginx in Docker.
 

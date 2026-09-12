@@ -62,6 +62,8 @@ export interface Tool {
  * dynamic loading.
  */
 export interface ToolRegistry {
+  /** Register a tool. Fails fast on duplicate tool names. */
+  register(tool: Tool): void;
   /** Returns the registered tool, or `undefined` when the name is unknown. */
   get(name: string): Tool | undefined;
   /**
