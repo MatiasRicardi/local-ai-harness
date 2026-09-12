@@ -29,6 +29,6 @@ describe("health endpoint", () => {
     const body = JSON.parse(response.body);
     expect(body).toHaveProperty("status", "ok");
     expect(body).toHaveProperty("name", "Local AI Harness");
-    expect(body).toHaveProperty("version", "0.0.0");
+    expect(body).toHaveProperty("version", "1.0.0");
   });
 });
