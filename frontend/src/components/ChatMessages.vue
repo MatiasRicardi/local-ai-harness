@@ -9,18 +9,15 @@ interface Props {
   loading: boolean
   error: FrontendApiError | null
   stopped: boolean
-  /**
-   * Presentation-only label for assistant messages: the currently configured
-   * model name. Optional so the component keeps mounting without it, and it is
-   * not stored per message (older answers may come from another model).
-   */
-  modelName?: string
 }
 
 const props = defineProps<Props>()
 
 const hasMessages = computed(() => props.messages.length > 0)
-const assistantLabel = computed(() => props.modelName?.trim() || "Assistant")
+// Neutral label: Message data does not store which model generated each
+// response, so deriving it from the live model name would relabel historical
+// answers whenever the provider model changes. Use a stable "Assistant" label.
+const assistantLabel = computed(() => "Assistant")
 
 function renderAssistantContent(content: string): string {
   return renderMarkdown(content)
@@ -100,12 +97,13 @@ function renderAssistantContent(content: string): string {
             {{ msg.role === 'user' ? "You" : assistantLabel }}
           </span>
         </div>
-        <!-- eslint-disable-next-line vue/no-v-html -->
+        <!-- eslint-disable vue/no-v-html --><!-- content is sanitized via DOMPurify in renderMarkdown() -->
         <div
           v-if="msg.role === 'assistant'"
           class="message-text markdown-content break-words rounded-2xl rounded-tl-sm border border-stone-200 bg-white p-4 text-sm leading-relaxed text-stone-800 shadow-sm"
           v-html="renderAssistantContent(msg.content)"
         ></div>
+        <!-- eslint-enable vue/no-v-html -->
         <!-- Kept on one line: the bubble preserves newlines, so it must not pick up template whitespace. -->
         <div v-else class="message-text inline-block max-w-2xl break-words whitespace-pre-wrap rounded-2xl rounded-tl-sm border border-stone-200/60 bg-stone-100/90 p-4 text-sm leading-relaxed text-stone-800">{{ msg.content }}</div>
         <div

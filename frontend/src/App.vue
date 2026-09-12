@@ -393,7 +393,6 @@ async function handleSend(text: string) {
               :loading="loading"
               :error="chatError"
               :stopped="stopped"
-              :model-name="configuredModel"
             />
             <div
               v-if="documentContextWarning"
