@@ -72,8 +72,8 @@ Browser
 
 The browser never talks to the model server directly, and the browser bundle
 never contains a Docker service DNS name (`http://backend:3000`), which the
-browser cannot resolve. All browser↔backend traffic uses a relative `/api` base
-that each runtime resolves to the right target.
+browser cannot resolve. **By default** browser↔backend traffic uses a relative
+`/api` base that each runtime resolves to the right target.
 
 ## Backend
 
@@ -131,6 +131,12 @@ no OCR).
   build-time value; the default empty string makes every request same-origin
   (`/api/...`). It also rejects non-local `http://` bases (CWE-319) so a
   sensitive payload is never sent over cleartext to a remote server.
+
+  An empty `VITE_API_URL` inherits the page origin rather than a fixed `/api`
+  base. That is safe for local development (loopback traffic never leaves the
+  machine), but on a non-local deployment served over HTTP it would still send
+  sensitive payloads over cleartext; HTTPS is required for non-local
+  deployments. See [docs/security.md](security.md).
 - `chat.ts` — streaming chat (`/api/chat/stream`) and non-streaming
   (`/api/chat`), plus stop/cancel.
 - `files.ts` — document upload; the extracted text is returned inline (no separate download/delete endpoint).
@@ -225,6 +231,22 @@ copied `.env` is `30000`.
   current message, and document, decides whether the document fits and, if not,
   truncates it. Produces `ContextTruncationMetadata` describing what was
   included vs. dropped.
+
+When a document is attached, the backend builds two messages and inserts them
+**before** the conversation (see [Chat data flow](#chat-data-flow)):
+
+- A **document-context** message at **system** priority that states the server
+  policy: the document is reference material, its instructions are not to be
+  followed as system/developer instructions, and it must not be treated as a
+  source of facts the model can invent beyond.
+- A **document-content** message at **user** priority containing the extracted
+  text enclosed in `<document>` delimiters.
+
+This ordering enforces an instruction hierarchy: the system-authored policy sits
+above the user-level document text. The backend does not execute the extracted
+text, but the model may still interpret it as user-level prompt instructions;
+the document is therefore treated as **untrusted reference material**, not as
+trusted policy.
 
 ## Error handling
 

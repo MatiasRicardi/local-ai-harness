@@ -31,7 +31,7 @@ Security posture of **Local AI Harness**, a local, single-user developer tool.
 verifies (via resolved absolute paths + `path.relative()`) that a deletion
 target stays **strictly inside** the root. It never follows symlinks or
 directories, treats missing files as already cleaned, and never leaks paths,
-file contents, or raw error details (mitigates CWE-539, path traversal).
+file contents, or raw error details (mitigates CWE-22, path traversal).
 
 ### 3. Timeouts
 
@@ -53,6 +53,12 @@ a remote server. The empty (same-origin) and `https://` bases are allowed;
 localhost development is explicitly permitted over HTTP because that traffic
 never leaves the machine.
 
+> **Non-local deployments require HTTPS.** An empty `VITE_API_URL` inherits the
+> page origin instead of a fixed base, so an HTTP page on a non-local
+> deployment can still send sensitive payloads over cleartext. This guard does
+> not cover that same-origin case; serve non-local deployments over HTTPS to
+> avoid cleartext transmission (CWE-319).
+
 ### 6. Temporary file lifecycle
 
 - Files are created, processed, and deleted within a single request.
@@ -63,8 +69,11 @@ never leaves the machine.
 ### 7. Untrusted content handling
 
 - **Documents**: text extraction normalizes line endings, removes null
-  characters, and rejects empty content. Extracted text is data, not executable
-  code or instructions.
+  characters, and rejects empty content. Extracted text is untrusted reference
+  material, not executable code. The backend does not execute it, but the model
+  may interpret it as user-level prompt instructions; this is mitigated by
+  sending it at user priority inside `<document>` delimiters beneath a
+  system-level policy (see [Context management](architecture.md#context-management)).
 - **Markdown rendering**: the frontend renders with `markdown-it` (raw HTML
   disabled) and sanitizes the result with `DOMPurify` using an explicit
   allowlist of tags and attributes.

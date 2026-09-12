@@ -62,13 +62,23 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 
 2. Open <http://127.0.0.1:8080>.
 
-3. The model server runs **on the host**, outside Docker. In **Provider
-   Settings**, set the base URL to:
-   - `http://host.docker.internal:<provider-port>`
+3. The model server runs **on the host**, outside Docker. Before configuring
+   its URL, confirm the server is reachable from Docker: a model service bound
+   to `127.0.0.1` is **not** reachable from a container, so it must bind to an
+   address Docker can reach. See the host-binding guidance in
+   [`docs/docker.md`](docker.md#the-model-server-must-be-reachable-from-docker)
+   first.
    
+   Then, in **Provider Settings**, set the base URL to:
+   - `http://host.docker.internal:<provider-port>`
+
    For example, Ollama on port 11434 → `http://host.docker.internal:11434`.
    (On Linux, `host.docker.internal` is provided by the `host-gateway` mapping
    in `docker-compose.yml`.)
+   
+   > **Warning:** binding the model server to a non-loopback address to make it
+   > reachable from Docker exposes it on the network. Ensure the host firewall
+   > restricts that binding to trusted interfaces/ports before continuing.
 
 4. **Test connection**, then send a message, exactly as in steps 4–7 of Flow A.
 
