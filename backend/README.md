@@ -2,15 +2,11 @@
 
 Fastify backend for Local AI Harness.
 
-> ⚠️ **Project in development — Reference code** ⚠️
+> Local AI Harness is a local, single-user developer tool. It is not intended as a hardened multi-user production service.
 
 ## 🧠 Purpose
 
-This backend is part of a learning project to integrate a local LLM into a web application. The code is written by the author, with review and correction support from the local language model **Ornith 1.0 35B**.
-
-### ⚠️ Warning
-
-This code may contain bugs and is not suitable for production. It is under continuous development.
+Provides the HTTP API for the Local AI Harness application: provider connection testing, streamed chat, and temporary document upload with text extraction. It talks to any OpenAI-compatible model server.
 
 ## Configuration
 
