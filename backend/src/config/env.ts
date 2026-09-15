@@ -12,6 +12,7 @@ const DEFAULTS = {
   DEFAULT_PROVIDER_TIMEOUT_MS: 120000,
   TEMP_FILE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
   ENVIRONMENT: "development",
+  TAVILY_BASE_URL: "https://api.tavily.com",
 };
 
 // Zod schema for environment validation
@@ -40,6 +41,18 @@ const envSchema = z.object({
     .transform((val) => Number(val))
     .pipe(z.number().int().positive()),
   ENVIRONMENT: z.enum(["development", "production", "test"]),
+  TAVILY_BASE_URL: z
+    .string()
+    .min(1, "Tavily base URL is required")
+    .url("Tavily base URL must be a valid URL")
+    .refine((url) => {
+      try {
+        const parsed = new URL(url);
+        return parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "Tavily base URL must use http or https protocol"),
 });
 
 // Parse environment variables
@@ -55,6 +68,7 @@ export function loadConfig(): Config {
     DEFAULT_PROVIDER_TIMEOUT_MS: DEFAULTS.DEFAULT_PROVIDER_TIMEOUT_MS.toString(),
     TEMP_FILE_MAX_AGE_MS: DEFAULTS.TEMP_FILE_MAX_AGE_MS.toString(),
     ENVIRONMENT: DEFAULTS.ENVIRONMENT,
+    TAVILY_BASE_URL: DEFAULTS.TAVILY_BASE_URL,
   };
 
   // Override with environment variables if present

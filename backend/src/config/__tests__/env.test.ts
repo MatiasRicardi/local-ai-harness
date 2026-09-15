@@ -54,6 +54,7 @@ describe("env configuration", () => {
     expect(config.MAX_UPLOAD_SIZE_MB).toBe(10);
     expect(config.UPLOAD_DIR).toBe("./uploads");
     expect(config.DEFAULT_PROVIDER_TIMEOUT_MS).toBe(120000);
+    expect(config.TAVILY_BASE_URL).toBe("https://api.tavily.com");
     expect(config.ENVIRONMENT).toBe("development");
   });
 
@@ -65,6 +66,7 @@ describe("env configuration", () => {
     process.env.AI_MAX_UPLOAD_SIZE_MB = "5";
     process.env.AI_UPLOAD_DIR = "./temp/uploads";
     process.env.AI_DEFAULT_PROVIDER_TIMEOUT_MS = "180000";
+    process.env.AI_TAVILY_BASE_URL = "https://api.tavily.com";
     process.env.AI_ENVIRONMENT = "production";
 
     const config = loadConfig();
@@ -79,6 +81,7 @@ describe("env configuration", () => {
     expect(config.MAX_UPLOAD_SIZE_MB).toBe(5);
     expect(config.UPLOAD_DIR).toBe("./temp/uploads");
     expect(config.DEFAULT_PROVIDER_TIMEOUT_MS).toBe(180000);
+    expect(config.TAVILY_BASE_URL).toBe("https://api.tavily.com");
     expect(config.ENVIRONMENT).toBe("production");
   });
 
@@ -93,6 +96,32 @@ describe("env configuration", () => {
     process.env.AI_HOST = "127.0.0.1";
     process.env.AI_PORT = "3000";
     process.env.AI_REQUEST_TIMEOUT_MS = "-100";
+
+    expect(() => loadConfig()).toThrow(/Invalid configuration/);
+  });
+
+  it("loads the default Tavily base URL", () => {
+    Object.keys(process.env).forEach((key) => {
+      if (key.startsWith("AI_")) {
+        delete process.env[key];
+      }
+    });
+
+    expect(loadConfig().TAVILY_BASE_URL).toBe("https://api.tavily.com");
+  });
+
+  it("throws error on an invalid Tavily base URL", () => {
+    process.env.AI_HOST = "127.0.0.1";
+    process.env.AI_PORT = "3000";
+    process.env.AI_TAVILY_BASE_URL = "ftp://api.tavily.com";
+
+    expect(() => loadConfig()).toThrow(/Invalid configuration/);
+  });
+
+  it("throws error on an empty Tavily base URL", () => {
+    process.env.AI_HOST = "127.0.0.1";
+    process.env.AI_PORT = "3000";
+    process.env.AI_TAVILY_BASE_URL = "";
 
     expect(() => loadConfig()).toThrow(/Invalid configuration/);
   });

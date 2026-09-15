@@ -10,6 +10,7 @@ import {
   ProviderClientError,
 } from "../../provider/client.js";
 import { ExtractionError } from "../../extractors/ExtractionError.js";
+import { TavilySearchError } from "../../search/tavily.js";
 
 describe("error handler", () => {
   it("serializes AppError without its internal cause", () => {
@@ -57,6 +58,34 @@ describe("error handler", () => {
     const appError = normalizeError(new ProviderClientError(errorType, "private provider response"));
 
     expect(appError).toMatchObject({ code, statusCode });
+  });
+
+  it.each([
+    [401, "PROVIDER_UNAUTHORIZED", 401],
+    [403, "PROVIDER_UNAUTHORIZED", 401],
+    [429, "PROVIDER_RATE_LIMITED", 429],
+    [500, "INVALID_PROVIDER_RESPONSE", 502],
+  ])(
+    "maps a Tavily HTTP %i failure to %s",
+    (status, code, statusCode) => {
+      const appError = normalizeError(
+        new TavilySearchError(
+          TavilySearchError.ErrorType.HTTP_ERROR,
+          `Tavily search returned HTTP ${status}`,
+          status,
+        ),
+      );
+
+      expect(appError).toMatchObject({ code, statusCode });
+    },
+  );
+
+  it("maps a Tavily timeout to PROVIDER_TIMEOUT", () => {
+    const appError = normalizeError(
+      new TavilySearchError(TavilySearchError.ErrorType.TIMEOUT, "Tavily search timed out"),
+    );
+
+    expect(appError).toMatchObject({ code: "PROVIDER_TIMEOUT", statusCode: 504 });
   });
 
   it("normalizes provider authorization failures", () => {

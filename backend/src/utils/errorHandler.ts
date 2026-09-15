@@ -2,6 +2,7 @@ import { consola } from "consola";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { OpenAICompatibleClient, ProviderClientError } from "../provider/client.js";
+import { TavilySearchError } from "../search/tavily.js";
 
 // ── Error codes ──────────────────────────────────────────────────────────────
 
@@ -10,6 +11,7 @@ export type AppErrorCode =
   | "PROVIDER_UNREACHABLE"
   | "PROVIDER_TIMEOUT"
   | "PROVIDER_UNAUTHORIZED"
+  | "PROVIDER_RATE_LIMITED"
   | "INVALID_PROVIDER_RESPONSE"
   | "UNSUPPORTED_FILE"
   | "FILE_TOO_LARGE"
@@ -63,6 +65,7 @@ const DEFAULT_MESSAGES: Record<AppErrorCode, string> = {
   PROVIDER_UNREACHABLE: "Unable to connect to the configured provider.",
   PROVIDER_TIMEOUT: "The configured provider did not respond in time.",
   PROVIDER_UNAUTHORIZED: "The provider rejected the configured credentials.",
+  PROVIDER_RATE_LIMITED: "The web search provider rate limit was exceeded or credits are exhausted.",
   INVALID_PROVIDER_RESPONSE: "The provider returned an invalid response.",
   UNSUPPORTED_FILE: "This file type is not supported.",
   FILE_TOO_LARGE: "The uploaded file is too large.",
@@ -79,6 +82,29 @@ const DEFAULT_MESSAGES: Record<AppErrorCode, string> = {
 // ── Provider error message patterns ──────────────────────────────────────────
 
 function matchProviderError(error: unknown): AppErrorCode | null {
+  if (error instanceof TavilySearchError) {
+    if (error.errorType === TavilySearchError.ErrorType.TIMEOUT) {
+      return "PROVIDER_TIMEOUT";
+    }
+    if (error.errorType === TavilySearchError.ErrorType.NETWORK_ERROR) {
+      return "PROVIDER_UNREACHABLE";
+    }
+    if (error.errorType === TavilySearchError.ErrorType.MALFORMED_RESPONSE) {
+      return "INVALID_PROVIDER_RESPONSE";
+    }
+    if (error.errorType === TavilySearchError.ErrorType.HTTP_ERROR && error.statusCode) {
+      const status = error.statusCode;
+      if (status === 401 || status === 403) {
+        return "PROVIDER_UNAUTHORIZED";
+      }
+      if (status === 429) {
+        return "PROVIDER_RATE_LIMITED";
+      }
+      return "INVALID_PROVIDER_RESPONSE";
+    }
+    return null;
+  }
+
   if (error instanceof ProviderClientError) {
     if (error.errorType === OpenAICompatibleClient.ErrorType.TIMEOUT) {
       return "PROVIDER_TIMEOUT";
@@ -253,7 +279,9 @@ export function normalizeError(error: unknown): AppError {
           ? 504
           : providerCode === "PROVIDER_UNAUTHORIZED"
             ? 401
-            : 502,
+            : providerCode === "PROVIDER_RATE_LIMITED"
+              ? 429
+              : 502,
       message: DEFAULT_MESSAGES[providerCode],
     });
   }
