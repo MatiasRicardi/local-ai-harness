@@ -59,6 +59,12 @@ never leaves the machine.
 > not cover that same-origin case; serve non-local deployments over HTTPS to
 > avoid cleartext transmission (CWE-319).
 
+The Tavily web-search provider sends its API key in the `Authorization` header,
+so the backend enforces HTTPS on the search path too: both the `AI_TAVILY_BASE_URL`
+config validator (`backend/src/config/env.ts`) and the provider's
+`normalizeSearchBaseUrl` reject plaintext `http://` URLs and require `https://`,
+closing the same CWE-319 gap for search base URLs.
+
 ### 6. Temporary file lifecycle
 
 - Files are created, processed, and deleted within a single request.

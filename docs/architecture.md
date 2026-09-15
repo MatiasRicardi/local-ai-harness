@@ -204,6 +204,7 @@ fall back to code defaults; `.env.example` documents the recommended values.
 | `AI_MAX_UPLOAD_SIZE_MB`          | `10`                         | Maximum upload size (MB).                 |
 | `AI_UPLOAD_DIR`                  | `./uploads`                  | Temporary upload directory.               |
 | `AI_DEFAULT_PROVIDER_TIMEOUT_MS` | `120000`                     | Default provider-test timeout (ms).       |
+| `AI_TAVILY_BASE_URL`             | `https://api.tavily.com`     | Tavily web-search API base URL.           |
 | `AI_TEMP_FILE_MAX_AGE_MS`        | `86400000` (24h)             | Stale temporary-file cleanup threshold.   |
 | `AI_ENVIRONMENT`                 | `development`                | `development` \| `production` \| `test`   |
 
