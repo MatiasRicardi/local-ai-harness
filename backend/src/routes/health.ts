@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import pkg from "../../package.json";
+import pkg from "../../package.json" with { type: "json" };
 
 const health: FastifyPluginAsync = async (server) => {
   server.get("/api/health", async () => {
