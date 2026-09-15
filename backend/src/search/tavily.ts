@@ -119,7 +119,18 @@ export class TavilySearchProvider implements WebSearchProvider {
     let data: TavilySearchResponse;
     try {
       data = (await response.json()) as TavilySearchResponse;
-    } catch {
+    } catch (error) {
+      // An abort/timeout while consuming the body surfaces as an AbortError /
+      // TimeoutError DOMException. Preserve it (via toSearchError) so the error
+      // handler returns the timeout response (504) instead of a 502 malformed
+      // response. Require both the abort reason and signal.aborted so a genuine
+      // JSON parse failure that races with cancellation is not misclassified.
+      const isAbortError =
+        error instanceof DOMException &&
+        (error.name === "AbortError" || error.name === "TimeoutError");
+      if (signal.aborted && isAbortError) {
+        throw this.toSearchError(error, timeoutSignal);
+      }
       throw new TavilySearchError(
         TavilySearchError.ErrorType.MALFORMED_RESPONSE,
         "Tavily returned an invalid or non-JSON response",
@@ -133,7 +144,12 @@ export class TavilySearchProvider implements WebSearchProvider {
       );
     }
 
-    return data.results.map((entry) => this.normalizeResult(entry));
+    // Cap to the validated maxResults: the upstream max_results hint is not
+    // guaranteed, and surplus entries (including malformed ones) must not affect
+    // the returned results.
+    return data.results
+      .slice(0, normalized.maxResults)
+      .map((entry) => this.normalizeResult(entry));
   }
 
   private async fetchSearch(

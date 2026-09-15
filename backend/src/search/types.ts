@@ -25,8 +25,9 @@ export interface WebSearchResult {
  */
 export interface WebSearchRequest {
   query: string;
-  maxResults: number;
-  searchDepth: "basic" | "advanced";
+  // Schema-defaulted fields: optional on input, applied by webSearchRequestSchema.
+  maxResults?: number;
+  searchDepth?: "basic" | "advanced";
 }
 
 /**
@@ -97,8 +98,10 @@ export function normalizeSearchBaseUrl(baseUrl: string | undefined | null): stri
     throw new Error(`Search base URL must be a valid URL: "${trimmed}"`);
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Search base URL must use http or https protocol: "${trimmed}"`);
+  // API keys traverse this URL in the Authorization header, so plaintext HTTP is
+  // rejected (CWE-319). Only HTTPS transport is allowed.
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Search base URL must use https protocol: "${trimmed}"`);
   }
 
   // Collapse internal duplicate slashes and strip trailing slashes.

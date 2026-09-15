@@ -118,6 +118,14 @@ describe("env configuration", () => {
     expect(() => loadConfig()).toThrow(/Invalid configuration/);
   });
 
+  it("throws error on an http (non-HTTPS) Tavily base URL", () => {
+    process.env.AI_HOST = "127.0.0.1";
+    process.env.AI_PORT = "3000";
+    process.env.AI_TAVILY_BASE_URL = "http://api.tavily.com";
+
+    expect(() => loadConfig()).toThrow(/Invalid configuration/);
+  });
+
   it("throws error on an empty Tavily base URL", () => {
     process.env.AI_HOST = "127.0.0.1";
     process.env.AI_PORT = "3000";

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   TavilySearchProvider,
+  TavilySearchError,
   TAVILY_DEFAULT_TIMEOUT_MS,
 } from "../tavily.js";
 import { normalizeSearchBaseUrl, WEB_SEARCH_MAX_QUERY } from "../types.js";
@@ -74,6 +75,12 @@ describe("normalizeSearchBaseUrl", () => {
   it("throws on a non-http/https URL", () => {
     expect(() => normalizeSearchBaseUrl("ftp://api.tavily.com")).toThrow(
       /http|https/i,
+    );
+  });
+
+  it("throws on a plaintext http URL (HTTPS required)", () => {
+    expect(() => normalizeSearchBaseUrl("http://api.tavily.com")).toThrow(
+      /https protocol/i,
     );
   });
 
@@ -178,7 +185,7 @@ describe("TavilySearchProvider.search", () => {
       apiKey: API_KEY,
     });
 
-    await provider.search({ query: "cats" } as never);
+    await provider.search({ query: "cats" });
 
     const [_url, init] = fetchMock.mock.calls[0];
     const body = JSON.parse(init.body);
@@ -222,6 +229,95 @@ describe("TavilySearchProvider.search", () => {
       { title: "T1", url: "https://a.example", content: "C1", score: 0.9 },
       { title: "T2", url: "https://b.example", content: "C2", score: undefined },
     ]);
+  });
+
+  it("caps returned results to maxResults even if Tavily returns more", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            { title: "T1", url: "https://a.example", content: "C1" },
+            { title: "T2", url: "https://b.example", content: "C2" },
+            { title: "T3", url: "https://c.example", content: "C3" },
+            { title: "T4", url: "https://d.example", content: "C4" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const provider = new TavilySearchProvider({
+      baseUrl: "https://api.tavily.com",
+      apiKey: API_KEY,
+    });
+
+    const results = await provider.search({
+      query: "cats",
+      maxResults: 2,
+      searchDepth: "basic",
+    });
+
+    expect(results).toHaveLength(2);
+    expect(results.map((result) => result.url)).toEqual([
+      "https://a.example",
+      "https://b.example",
+    ]);
+  });
+
+  it("ignores surplus malformed entries beyond maxResults", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            { title: "T1", url: "https://a.example", content: "C1" },
+            { title: "T2", url: "https://b.example", content: "C2" },
+            // Malformed surplus entry (no url) beyond maxResults.
+            { title: "T3", content: "C3" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const provider = new TavilySearchProvider({
+      baseUrl: "https://api.tavily.com",
+      apiKey: API_KEY,
+    });
+
+    const results = await provider.search({
+      query: "cats",
+      maxResults: 2,
+      searchDepth: "basic",
+    });
+
+    expect(results).toHaveLength(2);
+  });
+
+  it("preserves cancellation errors while reading the response body", async () => {
+    // A Response whose json() aborts the signal and rejects with an AbortError,
+    // mimicking a real fetch whose body is cancelled during consumption.
+    const controller = new AbortController();
+    const response = {
+      ok: true,
+      status: 200,
+      json: () => {
+        controller.abort();
+        return Promise.reject(new DOMException("Aborted", "AbortError"));
+      },
+    } as unknown as Response;
+
+    stubFetch(vi.fn(() => Promise.resolve(response)));
+
+    const provider = new TavilySearchProvider({
+      baseUrl: "https://api.tavily.com",
+      apiKey: API_KEY,
+    });
+
+    // The abort must reach toSearchError (USER_ABORT), not be swallowed as a
+    // MALFORMED_RESPONSE (which the handler would report as 502).
+    await expect(
+      provider.search({ query: "cats", maxResults: 1 }, { signal: controller.signal }),
+    ).rejects.toMatchObject({ errorType: TavilySearchError.ErrorType.USER_ABORT });
   });
 
   it("rejects maxResults above the limit", async () => {

@@ -48,11 +48,11 @@ const envSchema = z.object({
     .refine((url) => {
       try {
         const parsed = new URL(url);
-        return parsed.protocol === "http:" || parsed.protocol === "https:";
+        return parsed.protocol === "https:";
       } catch {
         return false;
       }
-    }, "Tavily base URL must use http or https protocol"),
+    }, "Tavily base URL must use https protocol"),
 });
 
 // Parse environment variables
