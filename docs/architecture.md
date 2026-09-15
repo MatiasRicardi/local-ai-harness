@@ -106,8 +106,8 @@ browser cannot resolve. **By default** browser↔backend traffic uses a relative
 **Provider client** (`provider/`):
 
 - `client.ts` — `OpenAICompatibleClient` talks to `<baseUrl>/v1/chat/completions`
-  (streaming) and `/v1/models` for provider tests, using the standard OpenAI
-  request shape.
+  (streaming), using the standard OpenAI request shape. Provider tests send a
+  minimal chat completion through the same client.
 - `sseParser.ts` — parses the server-sent-events stream from the provider.
 - `types.ts` / `schemas.ts` — Zod schemas for provider config and chat messages.
 
@@ -200,16 +200,15 @@ fall back to code defaults; `.env.example` documents the recommended values.
 | `AI_HOST`                        | `127.0.0.1`                  | Bind host.                                |
 | `AI_PORT`                        | `3000`                       | Bind port.                                |
 | `AI_CORS_ORIGINS`                | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowed origins. |
-| `AI_REQUEST_TIMEOUT_MS`          | `60000`                      | Upstream request timeout (`.env.example` sets `30000`). |
+| `AI_REQUEST_TIMEOUT_MS`          | `60000`                      | Upstream request timeout. |
 | `AI_MAX_UPLOAD_SIZE_MB`          | `10`                         | Maximum upload size (MB).                 |
 | `AI_UPLOAD_DIR`                  | `./uploads`                  | Temporary upload directory.               |
 | `AI_DEFAULT_PROVIDER_TIMEOUT_MS` | `120000`                     | Default provider-test timeout (ms).       |
 | `AI_TEMP_FILE_MAX_AGE_MS`        | `86400000` (24h)             | Stale temporary-file cleanup threshold.   |
 | `AI_ENVIRONMENT`                 | `development`                | `development` \| `production` \| `test`   |
 
-Note: the code default for `AI_REQUEST_TIMEOUT_MS` is `60000`, but
-`.env.example` sets it explicitly to `30000`, so the effective default for a
-copied `.env` is `30000`.
+Note: `.env.example` sets `AI_REQUEST_TIMEOUT_MS` to the same value as the
+code default (`60000`), so a copied `.env` uses the code default.
 
 ## File handling
 

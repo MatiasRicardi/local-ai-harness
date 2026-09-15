@@ -65,10 +65,11 @@ pnpm lint
 | `AI_HOST` | Server host | `127.0.0.1` |
 | `AI_PORT` | Server port | `3000` |
 | `AI_CORS_ORIGINS` | CORS origins (comma-separated) | `http://localhost:5173,http://127.0.0.1:5173` |
-| `AI_REQUEST_TIMEOUT_MS` | Request timeout in milliseconds | `30000` |
+| `AI_REQUEST_TIMEOUT_MS` | Request timeout in milliseconds | `60000` |
 | `AI_MAX_UPLOAD_SIZE_MB` | Maximum upload size in megabytes | `10` |
 | `AI_UPLOAD_DIR` | Upload directory | `./uploads` |
 | `AI_DEFAULT_PROVIDER_TIMEOUT_MS` | Default provider timeout in milliseconds | `120000` |
+| `AI_TEMP_FILE_MAX_AGE_MS` | Stale temporary-file cleanup threshold (milliseconds) | `86400000` (24h) |
 | `AI_ENVIRONMENT` | Environment (development, production, test) | `development` |
 
 ## Scripts
