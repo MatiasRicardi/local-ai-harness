@@ -1,4 +1,5 @@
-import type { ProviderConfig, ChatMessages } from "./schemas.js";
+import type { ProviderConfig, ChatMessage } from "./schemas.js";
+import type { ChatToolOptions } from "./tools.js";
 
 // ── ProviderClient interface ─────────────────────────────────────────────────
 
@@ -16,14 +17,19 @@ export interface ProviderClient {
   /**
    * Send a chat completion request and return the full response.
    */
-  chat(config: ProviderConfig, messages: ChatMessages): Promise<ChatResponse>;
+  chat(
+    config: ProviderConfig,
+    messages: ProviderRequestMessage[],
+    options?: ChatToolOptions,
+  ): Promise<ChatResponse>;
 
   /**
    * Send a chat completion request and return a stream of text deltas.
    */
   chatStream(
     config: ProviderConfig,
-    messages: ChatMessages,
+    messages: ProviderRequestMessage[],
+    options?: ChatToolOptions & { signal?: AbortSignal },
   ): Promise<ProviderStream>;
 }
 
@@ -73,6 +79,47 @@ export interface ChatChoice {
   message: ChatAssistantMessage;
   finish_reason: string | null;
 }
+
+/**
+ * Internal `tool` request message used by the orchestration layer to return a
+ * tool result to the model on the second model round. It mirrors the OpenAI
+ * contract (`{ role: "tool", tool_call_id, content }`).
+ *
+ * This is an internal orchestration-only message: it is never sent by the
+ * frontend and must not appear in the visible conversation state.
+ */
+export interface ProviderToolResultMessage {
+  role: "tool";
+  tool_call_id: string;
+  content: string;
+}
+
+/**
+ * Internal `assistant` request message that carries the tool calls the model
+ * requested on the first model round. Mirrors the OpenAI contract
+ * (`{ role: "assistant", tool_calls: [...] }`).
+ *
+ * This is an internal orchestration-only message: it is never sent by the
+ * frontend and must not appear in the visible conversation state.
+ */
+export interface ProviderAssistantToolCallMessage {
+  role: "assistant";
+  tool_calls: ProviderToolCall[];
+}
+
+/**
+ * The superset of request messages the provider client accepts. It extends the
+ * frontend-facing {@link ChatMessage} with the two internal orchestration
+ * message shapes above so the orchestrator can build the round-2 request.
+ *
+ * The frontend HTTP schema ({@link chatMessageSchema}) is intentionally left
+ * unchanged: only the frontend sends {@link ChatMessage}, while the
+ * orchestrator additionally constructs the internal tool messages.
+ */
+export type ProviderRequestMessage =
+  | ChatMessage
+  | ProviderToolResultMessage
+  | ProviderAssistantToolCallMessage;
 
 export interface Usage {
   prompt_tokens: number;
