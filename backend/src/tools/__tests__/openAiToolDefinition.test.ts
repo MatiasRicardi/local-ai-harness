@@ -43,6 +43,10 @@ describe("toOpenAiToolDefinition", () => {
   it("keeps the internal definition unchanged across repeated calls", () => {
     const first = toOpenAiToolDefinition(DEFINITION);
     (first.function.parameters as { required?: unknown[] }).required?.push("extra");
-    expect(DEFINITION.inputSchema).not.toHaveProperty("extra");
+    expect(DEFINITION.inputSchema).toEqual({
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    });
   });
 });
