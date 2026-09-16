@@ -20,6 +20,10 @@ export type AppErrorCode =
   | "EXTRACTION_FAILED"
   | "CONTEXT_TOO_LARGE"
   | "DOCUMENT_CONTEXT_TOO_LARGE"
+  | "TOOL_NOT_FOUND"
+  | "TOOL_INVALID_ARGUMENTS"
+  | "TOOL_EXECUTION_FAILED"
+  | "TOOL_CALL_LIMIT_EXCEEDED"
   | "INTERNAL_ERROR";
 
 // ── AppError ─────────────────────────────────────────────────────────────────
@@ -76,6 +80,14 @@ const DEFAULT_MESSAGES: Record<AppErrorCode, string> = {
     "The current conversation is too large for the configured context size. Start a new conversation or increase the configured context size.",
   DOCUMENT_CONTEXT_TOO_LARGE:
     "The current conversation is too large to include the attached document. Start a new conversation or increase the configured context size.",
+  TOOL_NOT_FOUND:
+    "The model requested a tool that this instance does not support. Retry without requesting tools.",
+  TOOL_INVALID_ARGUMENTS:
+    "The model returned a malformed tool call. Retry without requesting tools.",
+  TOOL_EXECUTION_FAILED:
+    "The requested tool could not be executed. Retry without requesting tools.",
+  TOOL_CALL_LIMIT_EXCEEDED:
+    "The model tried to use tools more than once. Retry without requesting tools.",
   INTERNAL_ERROR: "An unexpected error occurred.",
 };
 

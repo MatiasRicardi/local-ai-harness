@@ -4,8 +4,9 @@ import type {
   ChatAssistantMessage,
   ProviderStream,
   ProviderError,
+  ProviderRequestMessage,
 } from "./types.js";
-import { type ProviderConfig, type ChatMessages } from "./schemas.js";
+import { type ProviderConfig } from "./schemas.js";
 import type { ChatToolOptions } from "./tools.js";
 import { toOpenAiToolDefinition } from "../tools/openAiToolDefinition.js";
 
@@ -231,7 +232,7 @@ export class OpenAICompatibleClient implements ProviderClient {
    */
   async chat(
     config: ProviderConfig,
-    messages: ChatMessages,
+    messages: ProviderRequestMessage[],
     options?: ChatToolOptions,
   ): Promise<ChatResponse> {
     const url = `${this.baseUrl}/chat/completions`;
@@ -318,7 +319,7 @@ export class OpenAICompatibleClient implements ProviderClient {
    */
   async chatStream(
     config: ProviderConfig,
-    messages: ChatMessages,
+    messages: ProviderRequestMessage[],
     options?: ChatToolOptions & { signal?: AbortSignal },
   ): Promise<ProviderStream> {
     const capturedBaseUrl = this.baseUrl;
@@ -391,7 +392,7 @@ export class OpenAICompatibleClient implements ProviderClient {
    * `"none"` is explicitly requested.
    */
   private buildRequestBody(
-    base: { model: string; messages: ChatMessages },
+    base: { model: string; messages: ProviderRequestMessage[] },
     stream: boolean | undefined,
     options?: ChatToolOptions,
   ): Record<string, unknown> {
