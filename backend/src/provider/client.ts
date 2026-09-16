@@ -1,5 +1,13 @@
-import type { ProviderClient, ChatResponse, ProviderStream, ProviderError } from "./types.js";
-import { type ProviderConfig, type ChatMessages, type ChatMessage } from "./schemas.js";
+import type {
+  ProviderClient,
+  ChatResponse,
+  ChatAssistantMessage,
+  ProviderStream,
+  ProviderError,
+} from "./types.js";
+import { type ProviderConfig, type ChatMessages } from "./schemas.js";
+import type { ChatToolOptions } from "./tools.js";
+import { toOpenAiToolDefinition } from "../tools/openAiToolDefinition.js";
 
 export class ProviderClientError extends Error {
   readonly errorType: string;
@@ -224,6 +232,7 @@ export class OpenAICompatibleClient implements ProviderClient {
   async chat(
     config: ProviderConfig,
     messages: ChatMessages,
+    options?: ChatToolOptions,
   ): Promise<ChatResponse> {
     const url = `${this.baseUrl}/chat/completions`;
     const headers: Record<string, string> = {
@@ -234,10 +243,9 @@ export class OpenAICompatibleClient implements ProviderClient {
       headers["Authorization"] = `Bearer ${config.apiKey}`;
     }
 
-    const body = JSON.stringify({
-      model: config.model,
-      messages,
-    });
+    const body = JSON.stringify(
+      this.buildRequestBody({ model: config.model, messages }, undefined, options),
+    );
 
     try {
       const response = await fetch(url, {
@@ -260,7 +268,7 @@ export class OpenAICompatibleClient implements ProviderClient {
         model?: string;
         choices: {
           index?: number;
-          message: ChatMessage;
+          message: ChatAssistantMessage;
           finish_reason?: string | null;
         }[];
         usage?: {
@@ -311,7 +319,7 @@ export class OpenAICompatibleClient implements ProviderClient {
   async chatStream(
     config: ProviderConfig,
     messages: ChatMessages,
-    options?: { signal?: AbortSignal },
+    options?: ChatToolOptions & { signal?: AbortSignal },
   ): Promise<ProviderStream> {
     const capturedBaseUrl = this.baseUrl;
 
@@ -326,11 +334,9 @@ export class OpenAICompatibleClient implements ProviderClient {
         headers["Authorization"] = `Bearer ${config.apiKey}`;
       }
 
-      const body = JSON.stringify({
-        model: config.model,
-        messages,
-        stream: true,
-      });
+      const body = JSON.stringify(
+        this.buildRequestBody({ model: config.model, messages }, true, options),
+      );
 
       const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
       const combinedSignal = options?.signal
@@ -374,6 +380,40 @@ export class OpenAICompatibleClient implements ProviderClient {
         cause: error,
       });
     }
+  }
+
+  /**
+   * Build the chat-completion request body.
+   *
+   * `tools` and `tool_choice` are added only when tools are provided: an
+   * empty/omitted tools array sends neither field (backward compatible with
+   * v1.0.0). When tools are present, `tool_choice` defaults to `"auto"` unless
+   * `"none"` is explicitly requested.
+   */
+  private buildRequestBody(
+    base: { model: string; messages: ChatMessages },
+    stream: boolean | undefined,
+    options?: ChatToolOptions,
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: base.model,
+      messages: base.messages,
+    };
+
+    if (stream !== undefined) {
+      body.stream = stream;
+    }
+
+    const tools = options?.tools;
+    if (tools && tools.length > 0) {
+      // Convert the generic internal definition to the OpenAI Chat Completions
+      // wire shape (`{ type: "function", function: { name, description, parameters } }`)
+      // so compliant providers accept tool-enabled requests.
+      body.tools = tools.map(toOpenAiToolDefinition);
+      body.tool_choice = options?.toolChoice ?? "auto";
+    }
+
+    return body;
   }
 }
 

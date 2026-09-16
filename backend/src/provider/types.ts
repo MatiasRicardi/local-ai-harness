@@ -1,4 +1,4 @@
-import type { ProviderConfig, ChatMessage, ChatMessages } from "./schemas.js";
+import type { ProviderConfig, ChatMessages } from "./schemas.js";
 
 // ── ProviderClient interface ─────────────────────────────────────────────────
 
@@ -42,9 +42,35 @@ export interface ChatResponse {
   errorType?: string;
 }
 
+/**
+ * A raw OpenAI-style tool call as returned in a chat-completion response
+ * message. `function.arguments` is the raw streamed JSON text: it is parsed by
+ * a later orchestration step, never here. This is the response (provider →
+ * client) shape and is distinct from the streaming-parser
+ * {@link AccumulatedToolCall}.
+ */
+export interface ProviderToolCall {
+  id?: string;
+  type?: "function";
+  function: { name: string; arguments: string };
+}
+
+/**
+ * Assistant message in a chat-completion response.
+ *
+ * `content` is nullable: a tool-call response carries `content: null` with a
+ * populated `tool_calls`. This is a response-only shape and must not be reused
+ * for incoming request messages (which require non-empty string content).
+ */
+export interface ChatAssistantMessage {
+  role: "assistant";
+  content: string | null;
+  tool_calls?: ProviderToolCall[];
+}
+
 export interface ChatChoice {
   index: number;
-  message: ChatMessage;
+  message: ChatAssistantMessage;
   finish_reason: string | null;
 }
 
