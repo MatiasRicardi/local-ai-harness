@@ -135,7 +135,15 @@ export class ChatOrchestrator {
     // Parse JSON only after the full call has been accumulated.
     let args: unknown;
     try {
-      args = call.function.arguments.length > 0 ? JSON.parse(call.function.arguments) : undefined;
+      // Reject empty or whitespace-only arguments as malformed before
+      // execution so this follows the TOOL_INVALID_ARGUMENTS path instead of
+      // falling through to the tool (which would surface a VALIDATION_ERROR).
+      // Valid JSON, including the empty-object string "{}", still parses.
+      const rawArguments = call.function.arguments.trim();
+      if (rawArguments.length === 0) {
+        throw new SyntaxError("empty tool-call arguments");
+      }
+      args = JSON.parse(rawArguments);
     } catch {
       throw new AppError({
         code: "TOOL_INVALID_ARGUMENTS",
@@ -274,20 +282,29 @@ export class ChatOrchestrator {
     let toolCalls: AccumulatedToolCall[] | undefined;
     let parseErrorMessage: string | undefined;
 
-    for await (const event of parser.parse(reader)) {
-      // Abort surfaces as an "error" event from the parser; treat cancellation
-      // as silent and stop before doing any further work.
-      if (opts.signal?.aborted) {
-        return { status: "cancelled" };
+    try {
+      for await (const event of parser.parse(reader)) {
+        // Abort surfaces as an "error" event from the parser; treat cancellation
+        // as silent and stop before doing any further work.
+        if (opts.signal?.aborted) {
+          return { status: "cancelled" };
+        }
+        if (event.type === "delta") {
+          textDeltas.push(event.text);
+        } else if (event.type === "tool_calls") {
+          toolCalls = event.toolCalls;
+        } else if (event.type === "error") {
+          parseErrorMessage = event.message;
+        }
+        // "done" needs no handling; the loop ends when the stream completes.
       }
-      if (event.type === "delta") {
-        textDeltas.push(event.text);
-      } else if (event.type === "tool_calls") {
-        toolCalls = event.toolCalls;
-      } else if (event.type === "error") {
-        parseErrorMessage = event.message;
-      }
-      // "done" needs no handling; the loop ends when the stream completes.
+    } finally {
+      // A round can end early (abort, malformed response, or consumer
+      // abandonment). The parse() generator does not cancel the reader, so
+      // release the provider body and its lock here to avoid leaving the
+      // response active until the provider timeout.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
 
     if (opts.signal?.aborted) {
@@ -326,34 +343,42 @@ export class ChatOrchestrator {
     const parser = new SseParser({ signal: opts.signal });
     const reader = stream.getReader();
 
-    for await (const event of parser.parse(reader)) {
-      // Cancellation is silent: stop without emitting `done` or an error.
-      if (opts.signal?.aborted) {
-        return;
+    try {
+      for await (const event of parser.parse(reader)) {
+        // Cancellation is silent: stop without emitting `done` or an error.
+        if (opts.signal?.aborted) {
+          return;
+        }
+        if (event.type === "delta") {
+          yield { type: "delta", text: sanitizeSseData(event.text) };
+        } else if (event.type === "tool_calls") {
+          // This round runs with no tools attached (no-tools pass-through or
+          // round 2). Any tool call is a protocol violation — a provider trying
+          // to open a second tool round — and is rejected rather than ignored.
+          throw new AppError({
+            code: "TOOL_CALL_LIMIT_EXCEEDED",
+            statusCode: 502,
+            message: "The model returned a tool call when no tools were available.",
+          });
+        } else if (event.type === "done") {
+          yield { type: "done" };
+        } else if (event.type === "error") {
+          // A provider parse error on the final round is a real failure, not a
+          // cancellation, so surface it as a normalized AppError.
+          throw normalizeError(
+            new ProviderClientError(
+              OpenAICompatibleClient.ErrorType.MALFORMED_RESPONSE,
+              event.message,
+            ),
+          );
+        }
       }
-      if (event.type === "delta") {
-        yield { type: "delta", text: sanitizeSseData(event.text) };
-      } else if (event.type === "tool_calls") {
-        // This round runs with no tools attached (no-tools pass-through or
-        // round 2). Any tool call is a protocol violation — a provider trying
-        // to open a second tool round — and is rejected rather than ignored.
-        throw new AppError({
-          code: "TOOL_CALL_LIMIT_EXCEEDED",
-          statusCode: 502,
-          message: "The model returned a tool call when no tools were available.",
-        });
-      } else if (event.type === "done") {
-        yield { type: "done" };
-      } else if (event.type === "error") {
-        // A provider parse error on the final round is a real failure, not a
-        // cancellation, so surface it as a normalized AppError.
-        throw normalizeError(
-          new ProviderClientError(
-            OpenAICompatibleClient.ErrorType.MALFORMED_RESPONSE,
-            event.message,
-          ),
-        );
-      }
+    } finally {
+      // Release the provider body and reader lock on any early exit (abort,
+      // tool-limit, malformed response, or consumer abandonment) so the
+      // response is not left active until the provider timeout.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   }
 }

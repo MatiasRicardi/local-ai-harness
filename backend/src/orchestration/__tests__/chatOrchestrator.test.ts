@@ -348,6 +348,51 @@ describe("ChatOrchestrator — invalid tool calls", () => {
     ).rejects.toMatchObject({ code: "TOOL_INVALID_ARGUMENTS", statusCode: 502 });
   });
 
+  it("throws TOOL_INVALID_ARGUMENTS for empty tool-call arguments", async () => {
+    const { client } = createRecordingClient(
+      toolCallEvents({
+        tool_calls: [
+          { index: 0, id: "call_1", type: "function", function: { name: "web_search", arguments: "" } },
+        ],
+      }),
+    );
+
+    await expect(
+      collect(
+        new ChatOrchestrator(client).stream({
+          providerConfig: CONFIG,
+          messages: [userMessage("x")],
+          tools: createRegistry(createTool("web_search", "result")),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "TOOL_INVALID_ARGUMENTS", statusCode: 502 });
+  });
+
+  it("accepts a valid empty-object argument string", async () => {
+    const execute = vi.fn(async () => ({ content: "result" }));
+    const { client } = createRecordingClient([
+      ...toolCallEvents({
+        tool_calls: [
+          { index: 0, id: "call_1", type: "function", function: { name: "web_search", arguments: "{}" } },
+        ],
+      }),
+      ...DONE_ANSWER(),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result", execute)),
+      }),
+    );
+
+    // "{}" is valid JSON: it must parse to an object and reach execution
+    // (not throw TOOL_INVALID_ARGUMENTS, not become undefined).
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0]).toEqual({});
+  });
+
   it("throws TOOL_INVALID_ARGUMENTS when the tool call has no id", async () => {
     const { client } = createRecordingClient(
       toolCallEvents({
