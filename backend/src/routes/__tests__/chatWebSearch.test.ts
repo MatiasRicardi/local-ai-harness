@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { buildApp } from "../../app.js";
-import { config } from "../../config/env.js";
+import { config, overrideConfig } from "../../config/env.js";
 import type { Tool } from "../../tools/types.js";
 import { createWebSearchTool } from "../../tools/webSearchTool.js";
 import { TavilySearchProvider } from "../../search/tavily.js";
@@ -252,6 +252,107 @@ describe("web search chat integration", () => {
     const tavilyCall = calls.find((call) => call.url.includes("/search"));
     expect(tavilyCall?.url).toBe(`${config.TAVILY_BASE_URL}/search`);
     expect(tavilyCall?.method).toBe("POST");
+  });
+
+  it("uses an overridden AI_TAVILY_BASE_URL from backend config end-to-end", async () => {
+    const previous = config.TAVILY_BASE_URL;
+    overrideConfig({ TAVILY_BASE_URL: "https://custom.tavily.override.example" });
+    try {
+      app = buildApp();
+      const { fetchMock, calls } = createWebSearchFetch();
+      global.fetch = fetchMock;
+
+      await app.inject({
+        method: "POST",
+        url: "/api/chat/stream",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Tell me about cats" }],
+          webSearch: { enabled: true, provider: "tavily", apiKey: "tavily-secret-key" },
+        },
+      });
+
+      // The whole chain — env/config -> route -> provider -> fetch target —
+      // resolves to the overridden backend-configured base URL.
+      const tavilyCall = calls.find((call) => call.url.includes("/search"));
+      expect(tavilyCall?.url).toBe("https://custom.tavily.override.example/search");
+    } finally {
+      // Restore the shared config singleton for later tests.
+      overrideConfig({ TAVILY_BASE_URL: previous });
+    }
+  });
+
+  it("rejects a web_search call that tries to override the backend base URL via tool args", async () => {
+    app = buildApp();
+    const calls: RecordedCall[] = [];
+    // Round 1 returns a tool call carrying an injected `baseUrl`: the published
+    // tool contract only allows `query`, so the orchestrator must reject it.
+    global.fetch = ((url: string, options: RequestInit) => {
+      const body = options.body ? JSON.parse(options.body as string) : undefined;
+      if (String(url).includes("/search")) {
+        calls.push({ url: String(url), method: options.method });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ results: [] }),
+        });
+      }
+      if (Array.isArray(body?.tools) && body.tools.length > 0) {
+        return Promise.resolve(
+          sseResponse(
+            sseStream([
+              {
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "call_web",
+                          type: "function",
+                          function: {
+                            name: "web_search",
+                            arguments: JSON.stringify({
+                              query: "cats",
+                              baseUrl: "https://evil.example",
+                            }),
+                          },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              },
+              { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+              "[DONE]",
+            ]),
+          ),
+        );
+      }
+      return Promise.resolve(sseResponse(sseStream(["[DONE]"])));
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "Tell me about cats" }],
+        webSearch: { enabled: true, provider: "tavily", apiKey: "tavily-secret-key" },
+      },
+    });
+
+    // The streamed error carries the stable code, never the injected URL. An
+    // unknown/extra tool field (here `baseUrl`) is rejected by the tool's own
+    // validation before any tool_start, so the search never starts.
+    expect(response.body).toContain("event: error");
+    expect(response.body).toContain("VALIDATION_ERROR");
+    // No Tavily call is made: the malicious tool arguments are rejected before
+    // the provider is ever contacted.
+    expect(calls.find((call) => call.url.includes("/search"))).toBeUndefined();
+    expect(response.body).not.toContain("evil.example");
   });
 
   it("never leaks the request-scoped API key through SSE events", async () => {

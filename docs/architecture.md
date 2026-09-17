@@ -212,6 +212,26 @@ interface Message {
 5. On client cancel or disconnect, the backend stops upstream work silently.
 6. The frontend renders streamed tokens and maps error events to user messages.
 
+### Tool-call compatibility
+
+Web search is model-driven: the model decides to call the generic `web_search`
+tool, the backend executes it once, and streams the final answer. This relies
+on **tool calling**, an OpenAI-compatible capability that not every local model
+supports. Requirements:
+
+- a local model that is trained/quantized with tool-call support;
+- a compatible chat template and model server (Ollama, llama.cpp, LM Studio, …)
+  that emits `tool_calls` in streaming `delta.tool_calls` events;
+- support for the OpenAI-style fields used here (`type: "function"`,
+  `function.name`, `function.arguments`, `tool_call_id`).
+
+Tool calling is **not** guaranteed for all local models. When the model cannot
+call tools, the endpoint degrades gracefully to the plain v1.0.0 streaming path
+(`start`/`delta`/`done`) — no search happens. A model that requests an unknown
+tool, malformed arguments, or more than one call receives a stable error and is
+told to retry without tools. See the roadmap for the single-tool / single-round
+MVP limits.
+
 ## Configuration
 
 Configuration is validated at startup with Zod (`config/env.ts`). Missing values
