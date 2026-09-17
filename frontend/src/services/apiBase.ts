@@ -44,12 +44,24 @@ export function assertSecureApiBase(viteApiUrl: string): void {
   const base = viteApiUrl.trim()
   if (!base) return
 
+  // Protocol-relative bases (e.g. "//attacker.example") inherit the page
+  // protocol but hijack the host. new URL() throws for them (no base to derive
+  // the protocol), so the parse below would silently accept them; reject
+  // explicitly so a request can never be routed to an attacker host (CWE-201).
+  if (base.startsWith("//")) {
+    throw new Error(
+      `Insecure API base rejected: "${base}". Protocol-relative bases are not allowed.`,
+    )
+  }
+
   let parsed: URL
   try {
     parsed = new URL(base)
   } catch {
-    // A non-URL base will fail at request time; do not fail the bundle for it
-    // here. Only the cleartext-to-remote concern is guarded at resolution.
+    // A leading-slash same-origin relative path (e.g. "/api") has no base to
+    // resolve against and throws, but it resolves to the current origin at
+    // request time, so it is safe. Only the cleartext-to-remote concern is
+    // guarded at resolution.
     return
   }
 

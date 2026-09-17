@@ -74,4 +74,19 @@ describe("resolveApiBase", () => {
   it("derives API_BASE from VITE_API_URL rather than a hard-coded host", () => {
     expect(API_BASE).toBe(resolveApiBase(import.meta.env.VITE_API_URL))
   })
+
+  it("rejects a protocol-relative base (host hijack, CWE-201)", () => {
+    // //attacker.example inherits the page protocol but changes the host, so an
+    // enabled web-search request could send the Tavily key to that origin.
+    // new URL() throws for it, which must NOT be silently accepted.
+    expect(() => resolveApiBase("//attacker.example")).toThrow()
+    expect(() => assertSecureApiBase("//attacker.example")).toThrow()
+    // Leading whitespace does not hide the protocol-relative form.
+    expect(() => assertSecureApiBase("   //attacker.example")).toThrow()
+  })
+
+  it("still allows a same-origin leading-slash path", () => {
+    // Resolves against the current origin at request time, so it is safe.
+    expect(resolveApiBase("/api")).toBe("/api")
+  })
 })
