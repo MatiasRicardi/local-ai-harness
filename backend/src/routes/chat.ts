@@ -246,7 +246,9 @@ const chat: FastifyPluginAsync = async (server) => {
     // Calculate context budget before contacting provider
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: webSearchGuidanceMessage.content,
+      systemInstructions: result.data.webSearch?.enabled
+        ? webSearchGuidanceMessage.content
+        : "",
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
