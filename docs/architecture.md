@@ -138,24 +138,40 @@ no OCR).
   sensitive payloads over cleartext; HTTPS is required for non-local
   deployments. See [docs/security.md](security.md).
 - `chat.ts` — streaming chat (`/api/chat/stream`) and non-streaming
-  (`/api/chat`), plus stop/cancel.
+  (`/api/chat`), plus stop/cancel. It owns the SSE parsing/normalization:
+  tool-lifecycle callbacks (`onToolStart` / `onToolEnd` / `onSources`) and
+  `sanitizeSourcesForDisplay()`, which re-validates source URLs (only safe
+  `http:`/`https:` without credentials) so consumers render trusted metadata.
 - `files.ts` — document upload; the extracted text is returned inline (no separate download/delete endpoint).
 - `provider.ts` — provider connection test.
 
 **Composables**:
 
 - `useProviderSettings.ts` — persists provider settings to `localStorage`.
+- `useWebSearchSettings.ts` — persists Tavily web-search settings (API key only;
+  the base URL stays backend configuration) to `localStorage`.
 
 **Components**:
 
 - `ProviderSettings.vue`, `ChatMessages.vue`, `ChatInput.vue`,
   `DocumentAttachment.vue`.
 
+`ChatMessages.vue` renders the transient generation activity derived from the
+busy flags: while the backend runs the search tool (`tool_start` → `tool_end`)
+it shows a "Searching the web…" line in the loading area (replacing
+"Generating…"); once the stream ends, backend-provided sources are rendered
+under the correct assistant turn as plain-text titles with safe
+`target="_blank" rel="noopener noreferrer"` links (titles are never rendered
+with `v-html`).
+
 **Utils**:
 
 - `markdown.ts` — renders Markdown with `markdown-it` (HTML disabled) and
   sanitizes the output with `DOMPurify` (allowlist of tags/attributes).
 - `parseApiError.ts` — maps backend/network errors to a frontend error type.
+
+`types.ts` extends `Message` with an optional `sources?: WebSearchSource[]`
+field, populated per assistant turn from the backend `sources` SSE event.
 
 ## API contract
 

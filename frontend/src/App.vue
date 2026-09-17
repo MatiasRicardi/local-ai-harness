@@ -29,6 +29,10 @@ const errors = ref<Record<AppErrorArea, FrontendApiError | null>>({
 })
 const sending = ref(false)
 const stopped = ref(false)
+const webSearching = ref(false)
+// Transient web-search activity for the in-progress turn only. True strictly
+// between the backend `tool_start` and `tool_end` events; the UI shows a
+// "Searching the web…" line during this window (see `searchActivity`).
 const attachedDocument = ref<AttachedDocument | null>(null)
 const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
@@ -69,6 +73,14 @@ const configuredContext = computed(() => {
   return Number.isFinite(tokens) ? tokens.toLocaleString() : ""
 })
 
+// Presentation of the current generation's activity, derived from the existing
+// busy flags so no part of the streaming state machine needs refactoring:
+// idle (idle) | searching (web search running) | generating (streaming answer).
+type GenerationActivity = "idle" | "searching" | "generating"
+const searchActivity = computed<GenerationActivity>(() =>
+  loading.value ? (webSearching.value ? "searching" : "generating") : "idle",
+)
+
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
   messagesEnd.value?.scrollIntoView({ behavior })
 }
@@ -78,6 +90,7 @@ function cleanup() {
   sending.value = false
   loading.value = false
   stopped.value = false
+  webSearching.value = false
 }
 
 function handleStop() {
@@ -100,6 +113,7 @@ function normalizeBusyState() {
   sending.value = false
   loading.value = false
   stopped.value = false
+  webSearching.value = false
 }
 
 function handleReset() {
@@ -313,6 +327,28 @@ async function handleSend(text: string) {
       cleanup()
       scrollToBottom("auto")
     },
+    onToolStart: () => {
+      if (currentGenerationId !== generationId) return
+      webSearching.value = true
+      scrollToBottom("auto")
+    },
+    onToolEnd: () => {
+      if (currentGenerationId !== generationId) return
+      webSearching.value = false
+    },
+    onSources: (sources) => {
+      // Ignore callbacks from a previous generation (reset/cancel happened).
+      if (currentGenerationId !== generationId) return
+
+      // Attach to the current assistant turn via its id (never by index) so a
+      // concurrent reset/cancel cannot place the sources on the wrong message.
+      const message = assistantMessageId
+        ? messages.value.find((m) => m.id === assistantMessageId)
+        : undefined
+      if (message) {
+        message.sources = sources
+      }
+    },
   }
 
   try {
@@ -442,6 +478,7 @@ async function handleSend(text: string) {
             <ChatMessages
               :messages="messages"
               :loading="loading"
+              :activity="searchActivity"
               :error="chatError"
               :stopped="stopped"
             />

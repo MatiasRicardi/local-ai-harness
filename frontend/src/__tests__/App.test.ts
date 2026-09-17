@@ -428,4 +428,185 @@ describe("App integration", () => {
       })
     })
   })
+
+  describe("web search activity & sources", () => {
+    it("shows searching activity during tool_start and returns to generating", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+
+      // tool_start temporarily replaces "Generating…" with the search line.
+      hoisted.callbacks.onToolStart({ name: "web_search" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Searching the web…")
+
+      // tool_end transitions back to the normal generating state.
+      hoisted.callbacks.onToolEnd({ name: "web_search", resultCount: 2 })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Generating...")
+
+      // First delta renders the assistant answer.
+      hoisted.callbacks.onDelta("Answer")
+      await nextTick()
+      expect(wrapper.find(".message-assistant").text()).toContain("Answer")
+    })
+
+    it("attaches backend sources to the correct assistant turn", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+      hoisted.callbacks.onToolStart({ name: "web_search" })
+      hoisted.callbacks.onToolEnd({ name: "web_search", resultCount: 2 })
+      await nextTick()
+
+      hoisted.callbacks.onSources([
+        { id: 1, title: "MDN: Array", url: "https://developer.mozilla.org/en/docs/Array" },
+        { id: 2, title: "Example", url: "https://example.com/page" },
+      ])
+      await nextTick()
+
+      const sourcesBlock = wrapper.find(".message-assistant .sources")
+      expect(sourcesBlock.exists()).toBe(true)
+      expect(sourcesBlock.text()).toContain("Sources")
+      expect(sourcesBlock.text()).toContain("MDN: Array")
+      expect(sourcesBlock.text()).toContain("example.com")
+
+      const links = sourcesBlock.findAll("a")
+      expect(links).toHaveLength(2)
+      expect(links[0].attributes("href")).toBe(
+        "https://developer.mozilla.org/en/docs/Array",
+      )
+      expect(links[0].attributes("target")).toBe("_blank")
+      expect(links[0].attributes("rel")).toBe("noopener noreferrer")
+    })
+
+    it("renders no sources section when the turn did not search", async () => {
+      wrapper = mountApp()
+      await sendMessage(wrapper, "no search")
+
+      hoisted.callbacks.onStart("m", undefined)
+      hoisted.callbacks.onDelta("plain answer")
+      hoisted.callbacks.onDone()
+      await nextTick()
+
+      expect(wrapper.find(".sources").exists()).toBe(false)
+      expect(wrapper.find(".message-assistant").text()).toContain("plain answer")
+    })
+
+    it("escapes source titles (rendered as text, never v-html)", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+
+      hoisted.callbacks.onSources([
+        { id: 1, title: "<img src=x onerror=alert(1)", url: "https://example.com" },
+      ])
+      await nextTick()
+
+      const sourcesBlock = wrapper.find(".message-assistant .sources")
+      // The title is present as escaped text, not as an <img> element.
+      expect(sourcesBlock.html()).not.toContain("<img")
+      expect(sourcesBlock.text()).toContain("<img src=x onerror=alert(1)")
+    })
+
+    it("ignores unsafe source URLs", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+
+      hoisted.callbacks.onSources([
+        { id: 1, title: "Safe", url: "https://safe.example" },
+        { id: 2, title: "Data URI", url: "data:text/html,<script>alert(1)</script>" },
+        { id: 3, title: "No Protocol", url: "//evil.example" },
+      ])
+      await nextTick()
+
+      const sourcesBlock = wrapper.find(".message-assistant .sources")
+      const links = sourcesBlock.findAll("a")
+      expect(links).toHaveLength(1)
+      expect(links[0].attributes("href")).toBe("https://safe.example")
+    })
+
+    it("clears sources and activity on reset", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+      hoisted.callbacks.onSources([
+        { id: 1, title: "Source", url: "https://example.com" },
+      ])
+      await nextTick()
+      expect(wrapper.find(".sources").exists()).toBe(true)
+
+      await wrapper.find("button[aria-label='Start a new conversation']").trigger("click")
+      await nextTick()
+
+      expect(wrapper.find(".sources").exists()).toBe(false)
+    })
+
+    it("shows no sources block when the search is cancelled mid-run", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+      hoisted.callbacks.onToolStart({ name: "web_search" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Searching the web…")
+
+      // User cancels: the aborted stream invokes onStopped, which runs cleanup
+      // (clears the transient activity). No sources are produced for a cancelled
+      // search, so no sources block must appear.
+      hoisted.callbacks.onStopped()
+      await nextTick()
+
+      expect(wrapper.find(".sources").exists()).toBe(false)
+      expect(wrapper.find(".loading").exists()).toBe(false)
+    })
+  })
 })
