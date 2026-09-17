@@ -238,10 +238,15 @@ const chat: FastifyPluginAsync = async (server) => {
     // Determine context size (default 32768 if not provided)
     const contextSizeTokens = context?.maxTokens ?? 32768;
 
+    // Build the web search guidance message once, before budget calculation so
+    // the budget accounts for the system message that the enabled-search branch
+    // prepends to the request sent to ChatOrchestrator.
+    const webSearchGuidanceMessage = buildWebSearchGuidanceMessage();
+
     // Calculate context budget before contacting provider
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: "",
+      systemInstructions: webSearchGuidanceMessage.content,
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
@@ -320,7 +325,7 @@ const chat: FastifyPluginAsync = async (server) => {
         // registry is request-scoped. Internal tool-call/tool-result messages and
         // the search results never surface as visible assistant text.
         const orchestratedMessages = [
-          buildWebSearchGuidanceMessage(),
+          webSearchGuidanceMessage,
           ...allMessages,
         ];
 
