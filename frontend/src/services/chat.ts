@@ -65,6 +65,47 @@ export interface WebSearchSource {
   url: string
 }
 
+/**
+ * The exact `webSearch` payload sent with a chat request when web search is
+ * enabled. `enabled` is always `true` here: callers omit the whole field when
+ * the feature is off (see {@link buildWebSearchPayload}) so the legacy request
+ * body stays untouched when the feature is unused.
+ */
+export interface WebSearchRequestConfig {
+  enabled: true
+  provider: "tavily"
+  apiKey: string
+  searchDepth: "basic" | "advanced"
+  maxResults: number
+}
+
+/**
+ * Project normalised web-search settings into the request payload.
+ *
+ * Returns `undefined` when web search is disabled so the caller can omit the
+ * field entirely. `searchDepth` is coerced to `basic`/`advanced` as a
+ * defensive guard; `maxResults` is assumed already clamped by the settings
+ * layer. This is a pure projection — no clamping here.
+ */
+export function buildWebSearchPayload(settings: {
+  enabled: boolean
+  provider: string
+  apiKey: string
+  searchDepth: string
+  maxResults: number
+}): WebSearchRequestConfig | undefined {
+  if (!settings.enabled) {
+    return undefined
+  }
+  const depth = settings.searchDepth === "advanced" ? "advanced" : "basic"
+  return {
+    enabled: true,
+    provider: "tavily",
+    apiKey: settings.apiKey,
+    searchDepth: depth,
+    maxResults: settings.maxResults,
+  }
+}
 export interface StreamEvent {
   type: "start" | "delta" | "done" | "error" | "tool_start" | "tool_end" | "sources"
   data: {
@@ -108,6 +149,7 @@ export async function streamChat(
     signal?: AbortSignal
     document?: ChatDocumentContext
     context?: ChatContext
+    webSearch?: WebSearchRequestConfig
   },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
@@ -125,6 +167,11 @@ export async function streamChat(
     }
     if (options?.context) {
       requestBody.context = options.context
+    }
+    // Only include `webSearch` when enabled: omitting the field keeps the
+    // legacy request body intact when the feature is unused.
+    if (options?.webSearch) {
+      requestBody.webSearch = options.webSearch
     }
 
     const response = await fetch(apiUrl, {

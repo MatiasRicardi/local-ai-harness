@@ -3,6 +3,8 @@ import { mount, type VueWrapper } from "@vue/test-utils"
 import { nextTick } from "vue"
 import App from "../App.vue"
 import { getProviderSettings, updateProviderSettings } from "../composables/useProviderSettings"
+import { useWebSearchSettings } from "../composables/useWebSearchSettings"
+import type { WebSearchRequestConfig } from "../services/chat"
 import { uploadDocument } from "../services/files"
 import { FrontendApiError } from "../types/error"
 import { selectFile, stubFileInputValueSetter, flushPromises } from "./test-utils"
@@ -18,12 +20,18 @@ const hoisted = vi.hoisted(() => ({
   calls: [] as unknown[][],
 }))
 
-vi.mock("../services/chat", () => ({
-  streamChat: async (...args: unknown[]) => {
-    hoisted.calls.push(args)
-    hoisted.callbacks = args[2] as Record<string, (...args: unknown[]) => void>
-  },
-}))
+vi.mock("../services/chat", async (importOriginal) => {
+  // Reuse the real helpers (e.g. `buildWebSearchPayload`); only the network
+  // entry point is stubbed so tests can inspect the request contract.
+  const actual = await importOriginal<typeof import("../services/chat")>()
+  return {
+    ...actual,
+    streamChat: async (...args: unknown[]) => {
+      hoisted.calls.push(args)
+      hoisted.callbacks = args[2] as Record<string, (...args: unknown[]) => void>
+    },
+  }
+})
 
 // Only the network call is stubbed; the real extension rules are reused so the
 // mocks cannot drift from `isSupportedExtension`.
@@ -41,6 +49,7 @@ type StreamCall = [
     signal: AbortSignal
     document?: { fileId: string; filename: string; text: string }
     context?: { maxTokens: number }
+    webSearch?: WebSearchRequestConfig
   },
 ]
 
@@ -85,6 +94,13 @@ describe("App integration", () => {
 
   beforeEach(() => {
     localStorage.clear()
+    // Reset the web-search singleton, which persists across tests in the file.
+    useWebSearchSettings().updateWebSearchSettings({
+      enabled: false,
+      apiKey: "",
+      searchDepth: "basic",
+      maxResults: 5,
+    })
     confirmMock = vi.fn(() => true)
     Object.defineProperty(window, "confirm", {
       value: confirmMock,
@@ -334,5 +350,82 @@ describe("App integration", () => {
     expect(wrapper.find(".document-context-warning").exists()).toBe(true)
     expect(wrapper.find(".document-context-warning").text()).toContain("truncated")
     expect(wrapper.find(".error").exists()).toBe(false)
+  })
+
+  describe("web search settings", () => {
+    it("sends the exact tavily payload when enabled with a key", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "advanced",
+        maxResults: 4,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with search")
+
+      const [, , , options] = streamCall()
+      expect(options.webSearch).toEqual({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "advanced",
+        maxResults: 4,
+      })
+    })
+
+    it("omits web search entirely when disabled (default)", async () => {
+      useWebSearchSettings().updateWebSearchSettings({ enabled: false })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "no search")
+
+      const [, , , options] = streamCall()
+      expect(options.webSearch).toBeUndefined()
+    })
+
+    it("blocks the send when web search is enabled without a key", async () => {
+      useWebSearchSettings().updateWebSearchSettings({ enabled: true })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "blocked")
+
+      // Nothing is sent: the user message is not even queued.
+      expect(hoisted.calls).toHaveLength(0)
+    })
+
+    it("keeps web search settings across a New Conversation reset", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 3,
+      })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "first")
+      const firstOptions = streamCall()[3]
+
+      hoisted.callbacks.onStart("m", {})
+      hoisted.callbacks.onDone("m", {}, {})
+      await nextTick()
+
+      await wrapper
+        .find("button[aria-label='Start a new conversation']")
+        .trigger("click")
+      await nextTick()
+
+      await sendMessage(wrapper, "second")
+      const secondOptions = streamCall()[3]
+
+      expect(firstOptions.webSearch).toEqual(secondOptions.webSearch)
+      expect(secondOptions.webSearch).toEqual({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 3,
+      })
+    })
   })
 })

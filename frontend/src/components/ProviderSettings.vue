@@ -2,8 +2,35 @@
 import { computed, ref, watch, onUnmounted } from "vue"
 import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
 import { getProviderSettings, updateProviderSettings } from "../composables/useProviderSettings"
+import { useWebSearchSettings } from "../composables/useWebSearchSettings"
 
 const settings = getProviderSettings()
+const webSearch = useWebSearchSettings()
+
+// Reactive inline error for the Tavily key: shown next to the field when web
+// search is enabled but no key is configured. App.vue also blocks the send
+// path as a backstop.
+const webSearchMissingKey = computed(
+  () => webSearch.settings.value.enabled && !webSearch.settings.value.apiKey.trim(),
+)
+
+function onWebSearchToggle(event: Event): void {
+  webSearch.updateWebSearchSettings({ enabled: (event.target as HTMLInputElement).checked })
+}
+
+function onWebSearchApiKeyInput(event: Event): void {
+  webSearch.updateWebSearchSettings({ apiKey: (event.target as HTMLInputElement).value })
+}
+
+function onSearchDepthChange(event: Event): void {
+  webSearch.updateWebSearchSettings({
+    searchDepth: (event.target as HTMLSelectElement).value as "basic" | "advanced",
+  })
+}
+
+function onMaxResultsInput(event: Event): void {
+  webSearch.updateWebSearchSettings({ maxResults: Number((event.target as HTMLInputElement).value) })
+}
 
 const state = ref({
   name: settings.value.name,
@@ -218,6 +245,80 @@ const handleTest = async () => {
           step="10"
           class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:text-stone-400"
         />
+      </div>
+
+      <!-- Web search configuration. Kept separate from the LLM provider
+           settings above: this apiKey is the Tavily key, never the local
+           model key. No Base URL field — it stays backend-only. -->
+      <div
+        class="form-group flex flex-col gap-2 rounded-xl border border-stone-200/70 bg-stone-50/40 p-3 pt-4"
+        role="group" aria-labelledby="web-search-heading"
+      >
+        <h3 id="web-search-heading" class="m-0 text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Web search</h3>
+
+        <label class="inline-flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            :checked="webSearch.settings.value.enabled"
+            @change="onWebSearchToggle($event)"
+            aria-label="Enable web search"
+            class="size-3.5 rounded border-stone-300 text-sky-600 focus:border-sky-500 focus:ring-sky-500/30"
+          />
+          <span class="text-xs text-stone-700">Enable web search</span>
+        </label>
+
+        <div class="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2 shadow-sm">
+          <span class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Provider</span>
+          <span class="font-mono text-xs text-stone-700">Tavily</span>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label for="web-search-api-key" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">
+            Tavily API Key
+            <span v-if="webSearch.settings.value.enabled" class="font-normal normal-case tracking-normal text-amber-700">(required when enabled)</span>
+          </label>
+          <input
+            id="web-search-api-key"
+            :value="webSearch.settings.value.apiKey"
+            type="password"
+            @input="onWebSearchApiKeyInput($event)"
+            placeholder="tly-..."
+            autocomplete="off"
+            spellcheck="false"
+            aria-autocomplete="none"
+            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
+          />
+          <small v-if="webSearchMissingKey" class="warning text-[0.6875rem] font-normal leading-relaxed text-amber-700">Enter your Tavily API key to enable web search.</small>
+          <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">The Tavily key is sent to your Local AI Harness backend only when Web Search is enabled.</small>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label for="search-depth" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Search depth</label>
+          <select
+            id="search-depth"
+            :value="webSearch.settings.value.searchDepth"
+            @change="onSearchDepthChange($event)"
+            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs text-stone-900 shadow-sm"
+          >
+            <option value="basic">Basic</option>
+            <option value="advanced">Advanced</option>
+          </select>
+          <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">Basic search uses fewer Tavily credits than Advanced.</small>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label for="max-results" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Max results</label>
+          <input
+            id="max-results"
+            :value="webSearch.settings.value.maxResults"
+            @input="onMaxResultsInput($event)"
+            type="number"
+            min="1"
+            max="10"
+            step="1"
+            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:text-stone-400"
+          />
+        </div>
       </div>
 
       <div class="form-actions flex flex-col gap-2 pt-1">

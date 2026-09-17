@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from "vitest"
 import type { Mock } from "vitest"
-import { streamChat, isValidSourceUrl, sanitizeSourcesForDisplay } from "../chat"
+import {
+  streamChat,
+  isValidSourceUrl,
+  sanitizeSourcesForDisplay,
+  buildWebSearchPayload,
+} from "../chat"
 import { API_BASE } from "../apiBase"
 import type {
   ChatProviderConfig,
@@ -422,5 +427,70 @@ describe("streamChat", () => {
       `${API_BASE}/api/chat/stream`,
       expect.objectContaining({ method: "POST" }),
     )
+  })
+})
+
+describe("buildWebSearchPayload", () => {
+  it("returns undefined when web search is disabled", () => {
+    expect(
+      buildWebSearchPayload({
+        enabled: false,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "advanced",
+        maxResults: 5,
+      }),
+    ).toBeUndefined()
+  })
+
+  it("projects the exact payload when enabled", () => {
+    expect(
+      buildWebSearchPayload({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "advanced",
+        maxResults: 4,
+      }),
+    ).toEqual({
+      enabled: true,
+      provider: "tavily",
+      apiKey: "tly-abc",
+      searchDepth: "advanced",
+      maxResults: 4,
+    })
+  })
+
+  it("coerces an unknown searchDepth to basic but preserves advanced", () => {
+    expect(
+      buildWebSearchPayload({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "nonsense" as string,
+        maxResults: 3,
+      }),
+    ).toMatchObject({ searchDepth: "basic" })
+    expect(
+      buildWebSearchPayload({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "advanced",
+        maxResults: 3,
+      }),
+    ).toMatchObject({ searchDepth: "advanced" })
+  })
+
+  it("never sends the provider field other than tavily", () => {
+    expect(
+      buildWebSearchPayload({
+        enabled: true,
+        provider: "something-else",
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 3,
+      }),
+    ).toMatchObject({ provider: "tavily" })
   })
 })
