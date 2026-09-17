@@ -4,6 +4,8 @@ import type { ProviderConfig } from "../provider/schemas.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../provider/client.js";
 import { SseParser, type AccumulatedToolCall } from "../provider/sseParser.js";
 import type { ToolDefinition, ToolExecutionResult, ToolRegistry } from "../tools/types.js";
+import type { SourceRef } from "../tools/sourceSanitization.js";
+import { sanitizeSources } from "../tools/sourceSanitization.js";
 import { normalizeError, AppError } from "../utils/errorHandler.js";
 import { estimateTokens } from "../context/token-estimate.js";
 import {
@@ -48,12 +50,19 @@ export interface ChatOrchestrationInput {
 
 /**
  * Events emitted by the orchestrator. The future caller (the SSE route) maps
- * `delta` → an SSE `delta` event and `done` → an SSE `done` event. Internal
- * tool-call/tool-result messages never surface as visible text.
+ * each onto a matching SSE event. Internal tool-call/tool-result messages never
+ * surface as visible text.
+ *
+ * Tool lifecycle events (`tool_start` / `tool_end` / `sources`) are only ever
+ * emitted from the tool-execution path, so a plain model turn (no tools) still
+ * yields only `delta` / `done` — preserving the v1.0.0 streaming shape.
  */
 export type ChatOrchestrationEvent =
   | { type: "delta"; text: string }
-  | { type: "done" };
+  | { type: "done" }
+  | { type: "tool_start"; name: string; query?: string }
+  | { type: "tool_end"; name: string; resultCount: number }
+  | { type: "sources"; sources: SourceRef[] };
 
 /** Outcome of consuming one model round. */
 type RoundOutcome =
@@ -152,6 +161,24 @@ export class ChatOrchestrator {
       });
     }
 
+    // Validate semantic arguments before surfacing a tool_start. An invalid or
+    // unknown call fails here with no tool_start event, so the UI never sees a
+    // search that never started.
+    if (tool.validate) {
+      tool.validate(args);
+    }
+
+    // The search has started: emit tool_start exactly once, immediately before
+    // execution. The tool name comes from the tool definition (generic); the
+    // query is included only when it is a plain string.
+    const query =
+      typeof args === "object" && args !== null && typeof (args as { query?: unknown }).query === "string"
+        ? (args as { query: string }).query
+        : undefined;
+    yield query === undefined
+      ? { type: "tool_start", name: tool.definition.name }
+      : { type: "tool_start", name: tool.definition.name, query };
+
     // Execute. The same cancellation signal reaches the tool.
     let result: ToolExecutionResult;
     try {
@@ -181,6 +208,14 @@ export class ChatOrchestrator {
     if (input.signal?.aborted) {
       return;
     }
+
+    // Success: emit the tool lifecycle tail before the final answer. The
+    // sanitized sources are backend-grounded (only safe http(s) URLs with a
+    // numeric id survive) and never carry `content`; `resultCount` equals the
+    // number of sources actually emitted, including when that is zero.
+    const sanitizedSources = sanitizeSources(result.metadata?.sources);
+    yield { type: "tool_end", name: tool.definition.name, resultCount: sanitizedSources.length };
+    yield { type: "sources", sources: sanitizedSources };
 
     const round2Messages = await this.buildRound2Messages(input, call, result);
 

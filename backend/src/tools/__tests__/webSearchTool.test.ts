@@ -105,26 +105,21 @@ describe("web_search execution", () => {
     const provider = createFakeProvider({ results: [RESULT] });
     const tool = createWebSearchTool({ maxResults: 3, searchDepth: "basic" }, provider);
 
-    // Extra, provider-only keys supplied by the model must be ignored.
-    await tool.execute(
-      {
-        query: "animals",
-        search_depth: "advanced",
-        max_results: 100,
-        api_key: "leak",
-        base_url: "https://evil.example",
-      },
-      {},
-    );
-
-    const [call] = provider.calls;
-    expect(call.request).toMatchObject({
-      query: "animals",
-      maxResults: 3,
-      searchDepth: "basic",
-    });
-    expect(call.request).not.toHaveProperty("api_key");
-    expect(call.request).not.toHaveProperty("base_url");
+    // Extra, provider-only keys supplied by the model are outside the published
+    // tool contract and must be rejected (not silently dropped/ignored).
+    await expect(
+      tool.execute(
+        {
+          query: "animals",
+          search_depth: "advanced",
+          max_results: 100,
+          api_key: "leak",
+          base_url: "https://evil.example",
+        },
+        {},
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(provider.calls).toHaveLength(0);
   });
 
   it("propagates the AbortSignal from the execution context to the provider", async () => {
@@ -216,6 +211,22 @@ describe("web_search argument validation", () => {
     await expect(tool.execute({ query: "a".repeat(501) }, {})).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
     });
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("rejects maxResults/searchDepth supplied as tool arguments", async () => {
+    const provider = createFakeProvider({ results: [RESULT] });
+    const tool = createWebSearchTool({ maxResults: 5, searchDepth: "basic" }, provider);
+
+    // `maxResults`/`searchDepth` are application/user knobs, not model-controllable
+    // tool arguments: the strict schema rejects them even though the provider
+    // request schema accepts them.
+    await expect(
+      tool.execute({ query: "cats", maxResults: 3, searchDepth: "advanced" }, {}),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    await expect(
+      tool.execute({ query: "cats", searchDepth: "advanced" }, {}),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     expect(provider.calls).toHaveLength(0);
   });
 

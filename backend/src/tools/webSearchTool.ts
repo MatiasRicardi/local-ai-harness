@@ -8,7 +8,7 @@ import type {
   WebSearchProvider,
   WebSearchRequest,
 } from "../search/types.js";
-import { webSearchRequestSchema } from "../search/types.js";
+import { webSearchToolArgsSchema } from "../search/types.js";
 import { AppError } from "../utils/errorHandler.js";
 import {
   WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
@@ -67,6 +67,27 @@ export const webSearchToolDefinition: ToolDefinition = {
 };
 
 /**
+ * Validate model-supplied web search arguments.
+ *
+ * Throws a {@link AppError} with `VALIDATION_ERROR` when the query is missing
+ * or invalid, or when unknown/extra fields are present. Shared by the tool's
+ * own `execute` (defence-in-depth for direct callers) and by the orchestrator,
+ * which calls `validate` before emitting a `tool_start` event so an invalid
+ * call fails without ever signaling that a search started.
+ */
+function validateWebSearchArgs(args: unknown): void {
+  // Strict tool-argument contract: only `query` is model-controllable.
+  const parsed = webSearchToolArgsSchema.safeParse(args);
+  if (!parsed.success) {
+    throw new AppError({
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+      message: "Invalid web search arguments.",
+    });
+  }
+}
+
+/**
  * Create the `web_search` tool.
  *
  * @param config application/user-controlled settings (maxResults, searchDepth)
@@ -79,6 +100,7 @@ export function createWebSearchTool(
 ): Tool {
   return {
     definition: webSearchToolDefinition,
+    validate: validateWebSearchArgs,
 
     async execute(
       args: unknown,
@@ -86,20 +108,15 @@ export function createWebSearchTool(
     ): Promise<ToolExecutionResult> {
       // Validate our own arguments before any external work. Invalid input
       // surfaces through the existing VALIDATION_ERROR path; the provider is
-      // never contacted.
-      const parsed = webSearchRequestSchema.safeParse(args);
-      if (!parsed.success) {
-        throw new AppError({
-          code: "VALIDATION_ERROR",
-          statusCode: 400,
-          message: "Invalid web search arguments.",
-        });
-      }
+      // never contacted. (The orchestrator also runs `validate()` before
+      // tool_start; this covers direct callers.)
+      validateWebSearchArgs(args);
 
       // The model only supplies the query. Application configuration owns the
       // rest, so provider-only knobs are taken from `config`, never from args.
+      const parsed = webSearchToolArgsSchema.parse(args);
       const request: WebSearchRequest = {
-        query: parsed.data.query,
+        query: parsed.query,
         maxResults: config.maxResults,
         searchDepth: config.searchDepth,
       };

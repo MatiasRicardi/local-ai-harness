@@ -224,6 +224,18 @@ const chat: FastifyPluginAsync = async (server) => {
    *
    *   event: error
    *   data: {"message":"Provider connection failed"}
+   *
+   * When web search runs a tool call, the tool lifecycle is exposed as
+   * structured events between `start` and the final answer (no search path
+   * emits them):
+   *   event: tool_start
+   *   data: {"name":"web_search"} | {"name":"web_search","query":"..."}
+   *
+   *   event: tool_end
+   *   data: {"name":"web_search","resultCount":5}
+   *
+   *   event: sources
+   *   data: {"sources":[{"id":1,"title":"...","url":"..."}]}
    */
   server.post("/api/chat/stream", { sse: "manual" }, async (request, reply) => {
     // Validate request payload using Zod schema
@@ -356,6 +368,27 @@ const chat: FastifyPluginAsync = async (server) => {
             await reply.sse.send({
               event: "done",
               data: {},
+            });
+          } else if (event.type === "tool_start") {
+            // Optionally carry the safe query; never a base URL, key or header.
+            await reply.sse.send({
+              event: "tool_start",
+              data:
+                event.query === undefined
+                  ? { name: event.name }
+                  : { name: event.name, query: event.query },
+            });
+          } else if (event.type === "tool_end") {
+            await reply.sse.send({
+              event: "tool_end",
+              data: { name: event.name, resultCount: event.resultCount },
+            });
+          } else if (event.type === "sources") {
+            // Backend-grounded source metadata: sanitized to { id, title, url }
+            // with safe URLs only (see tools/sourceSanitization.ts).
+            await reply.sse.send({
+              event: "sources",
+              data: { sources: event.sources },
             });
           }
         }
