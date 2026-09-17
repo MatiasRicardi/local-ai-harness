@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { ref, computed } from "vue"
-import { streamChat, type ChatMessage, type ChatProviderConfig, type StreamCallbacks } from "./services/chat"
+import {
+  streamChat,
+  buildWebSearchPayload,
+  type ChatMessage,
+  type ChatProviderConfig,
+  type StreamCallbacks,
+  type WebSearchRequestConfig,
+} from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
+import { useWebSearchSettings } from "./composables/useWebSearchSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import ChatMessages from "./components/ChatMessages.vue"
 import DocumentAttachment from "./components/DocumentAttachment.vue"
@@ -39,6 +47,7 @@ const chatInputResetKey = ref(0)
 const attachmentResetVersion = ref(0)
 
 const providerSettings = useProviderSettings()
+const webSearchSettings = useWebSearchSettings()
 
 // Presentation-only summaries. They describe what the user configured, never a
 // live connection state (that stays inside ProviderSettings' Test Connection).
@@ -174,6 +183,16 @@ async function handleSend(text: string) {
   if (sending.value) return
   if (!text.trim()) return
 
+  // Web search defense-in-depth: block the send path when it is enabled without
+  // an API key. The clear inline error lives in ProviderSettings (reactive);
+  // the backend validates again as a backstop.
+  if (
+    webSearchSettings.settings.value.enabled &&
+    !webSearchSettings.settings.value.apiKey.trim()
+  ) {
+    return
+  }
+
   const userMessage: ChatMessage = {
     role: "user",
     content: text.trim(),
@@ -290,7 +309,21 @@ async function handleSend(text: string) {
     const context = {
       maxTokens: providerSettings.value.contextSizeTokens,
     }
-    await streamChat(allMessages, provider, callbacks, { signal, document, context })
+    // Omitted entirely when web search is disabled, keeping the legacy request
+    // body untouched. Only enabled requests reach the backend.
+    const webSearch: WebSearchRequestConfig | undefined = buildWebSearchPayload({
+      enabled: webSearchSettings.settings.value.enabled,
+      provider: webSearchSettings.settings.value.provider,
+      apiKey: webSearchSettings.settings.value.apiKey,
+      searchDepth: webSearchSettings.settings.value.searchDepth,
+      maxResults: webSearchSettings.settings.value.maxResults,
+    })
+    await streamChat(allMessages, provider, callbacks, {
+      signal,
+      document,
+      context,
+      webSearch,
+    })
   } catch (err) {
     // AbortError: onStopped or cleanup already handles state reset
     if (err instanceof DOMException && err.name === "AbortError") {
