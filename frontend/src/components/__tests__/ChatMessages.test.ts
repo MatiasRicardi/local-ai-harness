@@ -191,6 +191,24 @@ describe("ChatMessages", () => {
     expect(links[0].attributes("href")).toBe("https://safe.example")
   })
 
+  it("hides the Sources section when every URL is invalid", () => {
+    wrapper = mount(ChatMessages, {
+      props: {
+        messages: [
+          assistant("answer", false, [
+            { id: 1, title: "Data URI", url: "data:text/html,<script>alert(1)</script>" },
+            { id: 2, title: "No Protocol", url: "//evil.example" },
+          ]),
+        ],
+        loading: false,
+        activity: "idle",
+        error: null,
+        stopped: false,
+      },
+    })
+    expect(wrapper.find(".sources").exists()).toBe(false)
+  })
+
   it("leaves the assistant markdown unaffected by sources", () => {
     wrapper = mount(ChatMessages, {
       props: {

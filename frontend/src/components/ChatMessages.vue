@@ -36,7 +36,10 @@ function renderAssistantContent(content: string): string {
 // component must not render a malformed/unsafe entry if one ever slips through.
 function visibleSources(sources: Message["sources"]): Message["sources"] {
   if (!sources) return undefined
-  return sources.filter((source) => isValidSourceUrl(source.url))
+  const visible = sources.filter((source) => isValidSourceUrl(source.url))
+  // An all-invalid list must hide the section entirely: an empty array is
+  // truthy, so return undefined when nothing valid remains.
+  return visible.length > 0 ? visible : undefined
 }
 
 // Derive the display hostname defensively so a stray entry never throws while
