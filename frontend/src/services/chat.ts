@@ -52,8 +52,21 @@ export interface ContextTruncationMetadata {
   estimatedIncludedDocumentTokens: number
 }
 
+/**
+ * A single, client-sanitized web-search source reference.
+ *
+ * Mirrors the backend `sources` SSE payload (`{ id, title, url }`) but is
+ * re-validated on parse: only numeric ids and safe `http:`/`https:` URLs reach
+ * this shape, so consumers can render links without re-checking.
+ */
+export interface WebSearchSource {
+  id: number
+  title: string
+  url: string
+}
+
 export interface StreamEvent {
-  type: "start" | "delta" | "done" | "error"
+  type: "start" | "delta" | "done" | "error" | "tool_start" | "tool_end" | "sources"
   data: {
     model?: string
     text?: string
@@ -62,6 +75,12 @@ export interface StreamEvent {
     code?: string
     detail?: string
     context?: ContextTruncationMetadata
+    // Tool lifecycle (web search). `name` is the tool name; `query`/`resultCount`
+    // and `sources` are optional per event.
+    name?: string
+    query?: string
+    resultCount?: number
+    sources?: unknown
   }
 }
 
@@ -73,6 +92,12 @@ export interface StreamCallbacks {
   // The service layer owns parsing/normalization; consumers only decide where
   // to display an already-normalized error.
   onError: (error: FrontendApiError) => void
+  // Tool lifecycle callbacks are optional: the UI may observe them (Step 34)
+  // without the parser depending on any UI component. Absent callbacks are
+  // simply ignored — the events still parse and advance the stream.
+  onToolStart?: (payload: { name: string; query?: string }) => void
+  onToolEnd?: (payload: { name: string; resultCount: number }) => void
+  onSources?: (sources: WebSearchSource[]) => void
 }
 
 export async function streamChat(
@@ -133,7 +158,9 @@ export async function streamChat(
     // The event under construction belongs to the whole stream, not to one read:
     // a chunk boundary may fall between the `event:` and `data:` lines, and the
     // event type has to survive until its data line completes it.
-    let currentEvent: { type: "start" | "delta" | "done" | "error"; data: string } | null = null
+    let currentEvent:
+      | { type: "start" | "delta" | "done" | "error" | "tool_start" | "tool_end" | "sources"; data: string }
+      | null = null
     while (true) {
       const { done, value } = await reader.read()
 
@@ -161,7 +188,7 @@ export async function streamChat(
       for (const line of lines) {
         const trimmed = line.trim()
         if (trimmed.startsWith("event: ")) {
-          const eventType = trimmed.slice(7).trim() as "start" | "delta" | "done" | "error"
+          const eventType = trimmed.slice(7).trim() as "start" | "delta" | "done" | "error" | "tool_start" | "tool_end" | "sources"
           currentEvent = { type: eventType, data: "" }
         } else if (trimmed.startsWith("data: ")) {
           const data = trimmed.slice(6)
@@ -199,7 +226,7 @@ export async function streamChat(
 }
 
 function dispatchEvent(
-  event: { type: "start" | "delta" | "done" | "error"; data: string },
+  event: { type: "start" | "delta" | "done" | "error" | "tool_start" | "tool_end" | "sources"; data: string },
   callbacks: StreamCallbacks,
 ): boolean {
   try {
@@ -208,6 +235,10 @@ function dispatchEvent(
       text?: string
       message?: string
       context?: ContextTruncationMetadata
+      name?: string
+      query?: string
+      resultCount?: number
+      sources?: unknown
     }
 
     switch (event.type) {
@@ -229,6 +260,33 @@ function dispatchEvent(
         callbacks.onError(parseStreamErrorData(parsed))
         break
       }
+      case "tool_start": {
+        // Optional callback: ignore when the UI does not observe tool events.
+        if (callbacks.onToolStart && typeof parsed.name === "string") {
+          callbacks.onToolStart({
+            name: parsed.name,
+            ...(typeof parsed.query === "string" ? { query: parsed.query } : {}),
+          })
+        }
+        break
+      }
+      case "tool_end": {
+        if (callbacks.onToolEnd && typeof parsed.name === "string") {
+          callbacks.onToolEnd({
+            name: parsed.name,
+            resultCount: typeof parsed.resultCount === "number" ? parsed.resultCount : 0,
+          })
+        }
+        break
+      }
+      case "sources": {
+        // Defensive re-validation: the backend already sanitizes, but the
+        // parser drops anything that is not a safe { id, title, url } entry.
+        if (callbacks.onSources) {
+          callbacks.onSources(sanitizeSourcesForDisplay(parsed.sources))
+        }
+        break
+      }
     }
     // Non-terminal event.
     return false
@@ -237,6 +295,35 @@ function dispatchEvent(
     // This ensures malformed events don't break the stream consumer
     return false
   }
+}
+
+/** True only for non-empty `http:`/`https:` URLs. */
+export function isValidSourceUrl(url: unknown): url is string {
+  return typeof url === "string" && /^https?:\/\//i.test(url.trim())
+}
+
+/**
+/** Re-validate a parsed `sources` payload on the client. Mirrors the backend
+ * sanitizer: keeps only entries with a numeric id and a safe URL, and never
+ * forwards `content`/snippets. Unknown or malformed input yields an empty list.
+ */
+export function sanitizeSourcesForDisplay(sources: unknown): WebSearchSource[] {
+  if (!Array.isArray(sources)) {
+    return []
+  }
+
+  const out: WebSearchSource[] = []
+  for (const entry of sources) {
+    if (!entry || typeof entry !== "object") {
+      continue
+    }
+    const { id, title, url } = entry as { id?: unknown; title?: unknown; url?: unknown }
+    if (typeof id !== "number" || !Number.isFinite(id) || !isValidSourceUrl(url)) {
+      continue
+    }
+    out.push({ id, title: typeof title === "string" ? title : "", url: url.trim() })
+  }
+  return out
 }
 
 export async function chat(

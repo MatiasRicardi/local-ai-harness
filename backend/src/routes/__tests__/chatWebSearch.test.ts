@@ -217,7 +217,7 @@ describe("web search chat integration", () => {
     expect(response.statusCode).toBe(200);
     const body = response.body;
 
-    // Existing SSE contract is preserved: no new lifecycle/source events.
+    // Existing SSE contract is preserved.
     expect(body).toContain("event: start");
     expect(body).toContain("event: delta");
     expect(body).toContain("event: done");
@@ -226,6 +226,26 @@ describe("web search chat integration", () => {
     // present across the delta events.
     expect(body).toContain("Cats are");
     expect(body).toContain(" pets.");
+
+    // Tool lifecycle is exposed as structured events in the deterministic order
+    // start -> tool_start -> tool_end -> sources -> delta... -> done.
+    const pos = (name: string) => body.indexOf(`event: ${name}`);
+    expect(pos("tool_start")).toBeGreaterThan(-1);
+    expect(pos("tool_start")).toBeLessThan(pos("tool_end"));
+    expect(pos("tool_end")).toBeLessThan(pos("sources"));
+    expect(pos("sources")).toBeLessThan(pos("delta"));
+
+    // tool_start carries the tool name and the safe query only.
+    expect(body).toContain('"name":"web_search"');
+    expect(body).toContain('"query":"cats"');
+
+    // Sources are backend-grounded: id + title + url only, no content/score.
+    expect(body).toContain("event: sources");
+    expect(body).toContain('"id":1');
+    expect(body).toContain('"title":"Cats"');
+    expect(body).toContain('"url":"https://example.com/cats"');
+    expect(body).not.toContain("popular"); // result content is not forwarded
+    expect(body).not.toContain("0.9"); // provider-only score is not forwarded
 
     // The Tavily call targets the backend-configured base URL (request-scoped),
     // never a caller-provided one.
@@ -303,6 +323,11 @@ describe("web search chat integration", () => {
     expect(response.body).toContain("event: delta");
     expect(response.body).toContain("Hello there");
     expect(chatCalls).toBe(1);
+
+    // No web search: the plain v1.0.0 path emits no tool lifecycle/source events.
+    expect(response.body).not.toContain("event: tool_start");
+    expect(response.body).not.toContain("event: tool_end");
+    expect(response.body).not.toContain("event: sources");
   });
 
   describe("buildWebSearchTool under test", () => {

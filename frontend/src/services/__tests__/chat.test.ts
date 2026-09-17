@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import type { Mock } from "vitest"
-import { streamChat } from "../chat"
+import { streamChat, isValidSourceUrl, sanitizeSourcesForDisplay } from "../chat"
 import { API_BASE } from "../apiBase"
 import type {
   ChatProviderConfig,
@@ -266,6 +266,139 @@ describe("streamChat", () => {
 
     expect(callbacks.onStopped).toHaveBeenCalledTimes(1)
     expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
+  describe("web search tool events", () => {
+    it("forwards tool_start, tool_end and sources to the optional callbacks", async () => {
+      const callbacks = {
+        ...noopCallbacks(),
+        onToolStart: vi.fn(),
+        onToolEnd: vi.fn(),
+        onSources: vi.fn(),
+      }
+      const sse = [
+        "event: start\ndata: {\"model\":\"m\"}\n\n",
+        'event: tool_start\ndata: {"name":"web_search","query":"cats"}\n\n',
+        'event: tool_end\ndata: {"name":"web_search","resultCount":1}\n\n',
+        'event: sources\ndata: {"sources":[{"id":1,"title":"Cats","url":"https://example.com/cats"}]}\n\n',
+        "event: delta\ndata: {\"text\":\"Hello\"}\n\n",
+        "event: done\ndata: {}\n\n",
+      ].join("")
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+      await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search", query: "cats" })
+      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search", resultCount: 1 })
+      expect(callbacks.onSources).toHaveBeenCalledWith([
+        { id: 1, title: "Cats", url: "https://example.com/cats" },
+      ])
+      expect(callbacks.onDelta).toHaveBeenCalledWith("Hello")
+      expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+      expect(callbacks.onError).not.toHaveBeenCalled()
+    })
+
+    it("recovers a tool_end event split across chunk boundaries", async () => {
+      const callbacks = {
+        ...noopCallbacks(),
+        onToolStart: vi.fn(),
+        onToolEnd: vi.fn(),
+        onSources: vi.fn(),
+      }
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            okResponse(
+              sseStream([
+                'event: tool_start\ndata: {"name":"web_search","query":"cats"}\n\nevent: tool_en',
+                'd\ndata: {"name":"web_search","resultCount":2}\n\nevent: sources\ndata: {"sources":[]}\n\n',
+              ]),
+            ),
+          ),
+      )
+
+      await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search", query: "cats" })
+      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search", resultCount: 2 })
+      expect(callbacks.onSources).toHaveBeenCalledWith([])
+      expect(callbacks.onError).not.toHaveBeenCalled()
+    })
+
+    it("treats a malformed source event safely without dispatching", async () => {
+      const callbacks = {
+        ...noopCallbacks(),
+        onToolStart: vi.fn(),
+        onToolEnd: vi.fn(),
+        onSources: vi.fn(),
+      }
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          okResponse(
+            sseStream([
+              'event: tool_start\ndata: {"name":"web_search","query":"cats"}\n\n',
+              "event: sources\ndata: {bad json}\n\n",
+            ]),
+          ),
+        ),
+      )
+
+      await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+      expect(callbacks.onToolStart).toHaveBeenCalledTimes(1)
+      // The malformed `sources` payload is dropped, not forwarded, and does not
+      // abort the stream that follows.
+      expect(callbacks.onSources).not.toHaveBeenCalled()
+      expect(callbacks.onError).not.toHaveBeenCalled()
+    })
+
+    it("ignores an unknown event type without throwing", async () => {
+      const callbacks = {
+        ...noopCallbacks(),
+        onToolStart: vi.fn(),
+        onToolEnd: vi.fn(),
+        onSources: vi.fn(),
+      }
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          okResponse(
+            sseStream([
+              "event: start\ndata: {\"model\":\"m\"}\n\n",
+              "event: debug\ndata: {\"info\":\"x\"}\n\n",
+              "event: done\ndata: {}\n\n",
+            ]),
+          ),
+        ),
+      )
+
+      await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+      expect(callbacks.onStart).toHaveBeenCalledTimes(1)
+      expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+      expect(callbacks.onToolStart).not.toHaveBeenCalled()
+      expect(callbacks.onError).not.toHaveBeenCalled()
+    })
+
+    it("drops non-http(s) source URLs for display", () => {
+      const sources = [
+        { id: 1, title: "Safe", url: "https://example.com/a" },
+        { id: 2, title: "Unsafe", url: "javascript:alert(1)" },
+        { id: 3, title: "No url", url: "" },
+      ]
+      const sanitized = sanitizeSourcesForDisplay(sources)
+      expect(sanitized).toEqual([{ id: 1, title: "Safe", url: "https://example.com/a" }])
+    })
+
+    it("exposes the source-url validator", () => {
+      expect(isValidSourceUrl("https://example.com")).toBe(true)
+      expect(isValidSourceUrl("http://example.com")).toBe(true)
+      expect(isValidSourceUrl("javascript:alert(1)")).toBe(false)
+      expect(isValidSourceUrl("")).toBe(false)
+    })
   })
 
   it("posts the streaming request to the resolved API base", async () => {

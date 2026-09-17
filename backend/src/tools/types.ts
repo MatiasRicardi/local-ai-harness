@@ -49,6 +49,18 @@ export interface ToolExecutionResult {
  */
 export interface Tool {
   definition: ToolDefinition;
+  /**
+   * Optional pre-execution validation of the model-supplied arguments.
+   *
+   * Implementations that own a specific argument shape validate it here so the
+   * orchestrator can reject an invalid call before it is ever surfaced as a
+   * `tool_start` event. When omitted, the orchestrator only checks structural
+   * JSON validity.
+   *
+   * Throws on invalid input; the thrown error is propagated to the caller and
+   * no `tool_start` event is emitted for the call.
+   */
+  validate?(args: unknown): void;
   execute(
     args: unknown,
     context: ToolExecutionContext,

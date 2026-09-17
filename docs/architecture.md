@@ -186,7 +186,13 @@ interface Message {
 3. If a document is attached, the backend inserts a document-context block and a
    document-content block ahead of the conversation (see [Context management](#context-management)).
 4. The backend forwards the messages to the model server and pipes the SSE
-   stream back to the browser.
+   stream back to the browser. With web search enabled, a single tool call is
+   orchestrated and its lifecycle is exposed as structured SSE events between
+   `start` and the final answer: `tool_start` (name + safe query, emitted only
+   after the arguments validate and immediately before execution), `tool_end`
+   (`resultCount`), and `sources` (backend-sanitized `{ id, title, url }` with
+   safe `http(s)` URLs only — never `content`, never a key or base URL). A plain
+   model turn emits only the v1.0.0 `start`/`delta`/`done` events.
 5. On client cancel or disconnect, the backend stops upstream work silently.
 6. The frontend renders streamed tokens and maps error events to user messages.
 

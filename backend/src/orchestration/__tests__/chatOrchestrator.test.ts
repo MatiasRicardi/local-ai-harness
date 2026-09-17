@@ -4,6 +4,7 @@ import type { ProviderClient } from "../../provider/types.js";
 import type { ProviderConfig } from "../../provider/schemas.js";
 import type { Tool, ToolRegistry } from "../../tools/types.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../../provider/client.js";
+import { AppError } from "../../utils/errorHandler.js";
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -113,6 +114,26 @@ async function collect(
     events.push(event);
   }
   return events;
+}
+
+/**
+ * Collect events until the generator throws, returning whatever was emitted
+ * before the error. Used to assert that a `tool_start` is emitted before a
+ * failure/error path that never reaches `tool_end`/`sources`.
+ */
+async function collectUntilError(
+  gen: AsyncGenerator<{ type: string; name?: string; query?: string }>,
+): Promise<{ events: Array<{ type: string; name?: string; query?: string }>; error: unknown }> {
+  const events: Array<{ type: string; name?: string; query?: string }> = [];
+  let error: unknown;
+  try {
+    for await (const event of gen) {
+      events.push(event);
+    }
+  } catch (e) {
+    error = e;
+  }
+  return { events, error };
 }
 
 const CONFIG: ProviderConfig = {
@@ -243,8 +264,12 @@ describe("ChatOrchestrator — valid single tool call", () => {
       }),
     );
 
-    // The pre-tool filler text is discarded; only round 2 text is visible.
+    // The pre-tool filler text is discarded; only round 2 text is visible. The
+    // tool lifecycle is exposed as structured events before the final answer.
     expect(events).toEqual([
+      { type: "tool_start", name: "web_search", query: "weather" },
+      { type: "tool_end", name: "web_search", resultCount: 0 },
+      { type: "sources", sources: [] },
       { type: "delta", text: "The weather is sunny." },
       { type: "done" },
     ]);
@@ -503,6 +528,105 @@ describe("ChatOrchestrator — tool execution errors", () => {
   });
 });
 
+// ── Tool lifecycle events ─────────────────────────────────────────────────────
+
+describe("ChatOrchestrator — tool lifecycle events", () => {
+  it("emits tool_start, tool_end and sources in order on a successful search", async () => {
+    const tool = createTool("web_search", "result", async () => ({
+      content: "result",
+      metadata: { sources: [{ id: 1, title: "Cats", url: "https://example.com/cats", content: "c" }] },
+    }));
+    const { client } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    // tool events precede the round-2 streaming answer.
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search", query: "weather" },
+      { type: "tool_end", name: "web_search", resultCount: 1 },
+      { type: "sources", sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }] },
+      { type: "delta", text: "final" },
+      { type: "done" },
+    ]);
+  });
+
+  it("emits tool_end with resultCount equal to sanitized sources on zero results", async () => {
+    const tool = createTool("web_search", "result", async () => ({ content: "result", metadata: { sources: [] } }));
+    const { client } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search", query: "weather" },
+      { type: "tool_end", name: "web_search", resultCount: 0 },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "final" },
+      { type: "done" },
+    ]);
+  });
+
+  it("does not emit tool_start when the tool's own validation rejects the arguments", async () => {
+    const tool: Tool = {
+      definition: {
+        name: "web_search",
+        description: "A test tool",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+      },
+      validate: () => {
+        throw new AppError({ code: "VALIDATION_ERROR", statusCode: 400, message: "invalid query" });
+      },
+      execute: vi.fn(async () => ({ content: "result" })),
+    };
+
+    const { client } = createRecordingClient([...TOOL_CALL_EVENTS]);
+
+    const { events, error } = await collectUntilError(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    // Invalid semantic args fail before tool_start: no event, tool not executed.
+    expect(events).toEqual([]);
+    expect((error as AppError).code).toBe("VALIDATION_ERROR");
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("emits tool_start then the structured error without tool_end/sources on failure", async () => {
+    const tool = createTool("web_search", "result", async () => {
+      throw new ProviderClientError(OpenAICompatibleClient.ErrorType.TIMEOUT, "provider timed out");
+    });
+    const { client } = createRecordingClient([...TOOL_CALL_EVENTS]);
+
+    const { events, error } = await collectUntilError(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    // The search had started, so tool_start is emitted; the failure surfaces as
+    // the structured error with no tool_end and no sources.
+    expect(events).toEqual([{ type: "tool_start", name: "web_search", query: "weather" }]);
+    expect((error as AppError).code).toBe("PROVIDER_TIMEOUT");
+  });
+});
+
 // ── Cancellation ──────────────────────────────────────────────────────────────
 
 describe("ChatOrchestrator — cancellation", () => {
@@ -530,7 +654,10 @@ describe("ChatOrchestrator — cancellation", () => {
 
   it("does not start round 2 when aborted after round 1", async () => {
     // Abort inside the tool execution: round 1 completes, the tool runs, but
-    // the post-tool guard must prevent round 2 from starting.
+    // the post-tool guard must prevent round 2 from starting. tool_start was
+    // already emitted (the search had begun) before the abort, so the stream
+    // ends silently with just that one event — no tool_end, no sources, no
+    // error, no round 2.
     const controller = new AbortController();
     const tool = createTool("web_search", "result", async () => {
       controller.abort();
@@ -547,7 +674,7 @@ describe("ChatOrchestrator — cancellation", () => {
       }),
     );
 
-    expect(events).toEqual([]);
+    expect(events).toEqual([{ type: "tool_start", name: "web_search", query: "weather" }]);
     expect(tool.execute).toHaveBeenCalledTimes(1);
     // Only round 1 was issued; no round-2 request.
     expect(calls.length).toBe(1);
