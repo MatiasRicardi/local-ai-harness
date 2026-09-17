@@ -2,11 +2,15 @@
 import { computed } from "vue"
 import type { Message } from "../types"
 import type { FrontendApiError } from "../types/error"
+import { isValidSourceUrl } from "../services/chat"
 import { renderMarkdown } from "../utils/markdown"
+
+type GenerationActivity = "idle" | "searching" | "generating"
 
 interface Props {
   messages: Message[]
   loading: boolean
+  activity: GenerationActivity
   error: FrontendApiError | null
   stopped: boolean
 }
@@ -18,9 +22,34 @@ const hasMessages = computed(() => props.messages.length > 0)
 // response, so deriving it from the live model name would relabel historical
 // answers whenever the provider model changes. Use a stable "Assistant" label.
 const assistantLabel = computed(() => "Assistant")
+// The transient web-search line temporarily replaces "Generating…" while the
+// backend runs the search tool (Step 34). The animated dots stay either way.
+const activityLabel = computed(() =>
+  props.activity === "searching" ? "Searching the web…" : "Generating...",
+)
 
 function renderAssistantContent(content: string): string {
   return renderMarkdown(content)
+}
+
+// Defense in depth: the service layer already sanitizes sources, but the
+// component must not render a malformed/unsafe entry if one ever slips through.
+function visibleSources(sources: Message["sources"]): Message["sources"] {
+  if (!sources) return undefined
+  const visible = sources.filter((source) => isValidSourceUrl(source.url))
+  // An all-invalid list must hide the section entirely: an empty array is
+  // truthy, so return undefined when nothing valid remains.
+  return visible.length > 0 ? visible : undefined
+}
+
+// Derive the display hostname defensively so a stray entry never throws while
+// rendering.
+function sourceDomain(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
 }
 </script>
 
@@ -106,6 +135,27 @@ function renderAssistantContent(content: string): string {
         <!-- eslint-enable vue/no-v-html -->
         <!-- Kept on one line: the bubble preserves newlines, so it must not pick up template whitespace. -->
         <div v-else class="message-text inline-block max-w-2xl break-words whitespace-pre-wrap rounded-2xl rounded-tl-sm border border-stone-200/60 bg-stone-100/90 p-4 text-sm leading-relaxed text-stone-800">{{ msg.content }}</div>
+        <!-- Backend-provided, structurally-validated sources for this turn. Rendered
+             as plain text + safe links; never from model-generated Markdown. -->
+        <div
+          v-if="msg.role === 'assistant' && visibleSources(msg.sources)"
+          class="sources mt-3 border-t border-stone-200/70 pt-2.5"
+        >
+          <p class="m-0 mb-1.5 text-xs font-semibold text-stone-700">Sources</p>
+          <ol class="m-0 list-decimal items-start space-y-1 pl-5">
+            <li v-for="source in visibleSources(msg.sources)" :key="source.id" class="flex gap-1 text-[0.8125rem] text-stone-700">
+              <a
+                :href="source.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="break-words text-sky-700 underline hover:text-sky-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500 focus-visible:ring-offset-1"
+              >
+                <span>{{ source.title }}</span>
+                <span class="text-stone-400"> — {{ sourceDomain(source.url) }}</span>
+              </a>
+            </li>
+          </ol>
+        </div>
         <div
           v-if="msg.stopped"
           class="message-stopped-indicator mt-1.5 flex items-center gap-1.5 text-[0.6875rem] font-medium italic text-red-600"
@@ -115,13 +165,18 @@ function renderAssistantContent(content: string): string {
       </div>
     </article>
 
-    <div v-if="loading" class="loading flex items-center gap-2.5 text-xs italic text-stone-400">
+    <div
+      v-if="loading"
+      aria-live="polite"
+      aria-atomic="true"
+      class="loading flex items-center gap-2.5 text-xs italic text-stone-400"
+    >
       <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
         <span class="size-1.5 animate-pulse rounded-full bg-sky-400"></span>
         <span class="size-1.5 animate-pulse rounded-full bg-sky-500"></span>
         <span class="size-1.5 animate-pulse rounded-full bg-sky-600"></span>
       </span>
-      <span>Generating...</span>
+      <span>{{ activityLabel }}</span>
     </div>
 
     <div
