@@ -388,6 +388,7 @@ describe("streamChat", () => {
         { id: 1, title: "Safe", url: "https://example.com/a" },
         { id: 2, title: "Unsafe", url: "javascript:alert(1)" },
         { id: 3, title: "No url", url: "" },
+        { id: 4, title: "Credentials", url: "https://user:token@example.com/leak" },
       ]
       const sanitized = sanitizeSourcesForDisplay(sources)
       expect(sanitized).toEqual([{ id: 1, title: "Safe", url: "https://example.com/a" }])
@@ -398,6 +399,11 @@ describe("streamChat", () => {
       expect(isValidSourceUrl("http://example.com")).toBe(true)
       expect(isValidSourceUrl("javascript:alert(1)")).toBe(false)
       expect(isValidSourceUrl("")).toBe(false)
+    })
+
+    it("drops source URLs carrying userinfo credentials", () => {
+      expect(isValidSourceUrl("https://user:token@example.com")).toBe(false)
+      expect(isValidSourceUrl("http://user@example.com")).toBe(false)
     })
   })
 

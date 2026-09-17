@@ -297,9 +297,35 @@ function dispatchEvent(
   }
 }
 
-/** True only for non-empty `http:`/`https:` URLs. */
+/**
+ * True only for non-empty `http:`/`https:` URLs without userinfo credentials.
+ *
+ * Parses the value so a URL carrying credentials (e.g. `https://user:token@`)
+ * is rejected (CWE-200) — the same guard the backend applies on `sources`.
+ */
 export function isValidSourceUrl(url: unknown): url is string {
-  return typeof url === "string" && /^https?:\/\//i.test(url.trim())
+  if (typeof url !== "string") {
+    return false
+  }
+
+  const trimmed = url.trim()
+  if (trimmed.length === 0) {
+    return false
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false
+  }
+
+  // Reject credential-bearing URLs so source metadata never leaks userinfo.
+  return !parsed.username && !parsed.password
 }
 
 /**
