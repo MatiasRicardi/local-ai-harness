@@ -369,7 +369,7 @@ describe("ChatOrchestrator — invalid tool calls", () => {
   });
 
   it("accepts a valid empty-object argument string", async () => {
-    const execute = vi.fn(async () => ({ content: "result" }));
+    const execute = vi.fn(async (_args: unknown) => ({ content: "result" }));
     const { client } = createRecordingClient([
       ...toolCallEvents({
         tool_calls: [

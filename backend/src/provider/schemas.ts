@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { WEB_SEARCH_MIN_RESULTS, WEB_SEARCH_MAX_RESULTS } from "../search/types.js";
 
 // ── Provider configuration schema ────────────────────────────────────────────
 
@@ -89,6 +90,46 @@ export const chatContextSchema = z.object({
 
 export type ChatContext = z.infer<typeof chatContextSchema>;
 
+// ── Web search configuration schema ──────────────────────────────────────────
+
+/**
+ * Zod schema for the optional per-request web search configuration.
+ *
+ * Web search is an opt-in capability. When `enabled` is `true` the backend
+ * wires the `web_search` tool into the streaming chat turn. The model only
+ * ever controls the search `query`; the endpoint (`TAVILY_BASE_URL`) and the
+ * credentials (`apiKey`) are owned by the backend configuration and by the
+ * user request respectively, and can never be altered through this object.
+ *
+ * Only `tavily` is supported in this phase, so an unknown provider is a plain
+ * validation failure (no dedicated error code yet). `maxResults` and
+ * `searchDepth` are application/user knobs: optional here, defaulted by the
+ * backend where omitted.
+ */
+export const webSearchSchema = z
+  .object({
+    enabled: z.boolean(),
+    provider: z.enum(["tavily"], {
+      message: "Only the 'tavily' web search provider is supported",
+    }),
+    apiKey: z
+      .string()
+      .min(1, "API key must not be empty")
+      .optional(),
+    maxResults: z
+      .int()
+      .min(WEB_SEARCH_MIN_RESULTS, `maxResults must be at least ${WEB_SEARCH_MIN_RESULTS}`)
+      .max(WEB_SEARCH_MAX_RESULTS, `maxResults must not exceed ${WEB_SEARCH_MAX_RESULTS}`)
+      .optional(),
+    searchDepth: z.enum(["basic", "advanced"]).optional(),
+  })
+  .refine((value) => !(value.enabled && !value.apiKey), {
+    message: "An API key is required when web search is enabled",
+    path: ["apiKey"],
+  });
+
+export type WebSearchConfig = z.infer<typeof webSearchSchema>;
+
 // ── Chat request schema ──────────────────────────────────────────────────────
 
 /**
@@ -99,6 +140,7 @@ export const chatRequestSchema = z.object({
   messages: chatMessagesSchema,
   document: chatDocumentContextSchema.optional(),
   context: chatContextSchema.optional(),
+  webSearch: webSearchSchema.optional(),
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
