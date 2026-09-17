@@ -17,6 +17,7 @@ import ChatInput from "./components/ChatInput.vue"
 import type { Message } from "./types"
 import type { AttachedDocument } from "./services/files"
 import { FrontendApiError, type AppErrorArea } from "./types/error"
+import { isSecureTransport } from "./services/apiBase"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
@@ -190,6 +191,23 @@ async function handleSend(text: string) {
     webSearchSettings.settings.value.enabled &&
     !webSearchSettings.settings.value.apiKey.trim()
   ) {
+    return
+  }
+
+  // Web search carries the Tavily key, a sensitive third-party secret. Reject
+  // it before constructing the request when the current transport would send it
+  // over cleartext to a non-local origin (CWE-319). A non-empty API base is
+  // already validated as local-or-HTTPS; only the same-origin (empty base) case
+  // depends on the page protocol, which is safe on loopback or over HTTPS.
+  if (
+    webSearchSettings.settings.value.enabled &&
+    !isSecureTransport()
+  ) {
+    errors.value.chat = new FrontendApiError({
+      code: "VALIDATION_ERROR",
+      message:
+        "Web search is disabled on insecure connections: serve this page over HTTPS or from localhost to send the Tavily key.",
+    })
     return
   }
 

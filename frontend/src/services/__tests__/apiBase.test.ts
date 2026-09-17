@@ -1,5 +1,44 @@
 import { describe, it, expect } from "vitest"
-import { API_BASE, resolveApiBase, assertSecureApiBase } from "../apiBase"
+import {
+  API_BASE,
+  resolveApiBase,
+  assertSecureApiBase,
+  isSecurePageOrigin,
+  isSecureTransport,
+} from "../apiBase"
+
+describe("isSecurePageOrigin", () => {
+  it("allows HTTPS regardless of host", () => {
+    expect(isSecurePageOrigin({ protocol: "https:", hostname: "api.example.test" })).toBe(
+      true,
+    )
+  })
+
+  it("allows loopback hosts over HTTP (traffic never leaves the machine)", () => {
+    expect(isSecurePageOrigin({ protocol: "http:", hostname: "127.0.0.1" })).toBe(
+      true,
+    )
+    expect(isSecurePageOrigin({ protocol: "http:", hostname: "localhost" })).toBe(
+      true,
+    )
+  })
+
+  it("rejects a non-local host over HTTP (cleartext key exposure, CWE-319)", () => {
+    expect(
+      isSecurePageOrigin({ protocol: "http:", hostname: "api.example.test" }),
+    ).toBe(false)
+  })
+})
+
+// `isSecureTransport` gates the same-origin (empty API_BASE) case on
+// `isSecurePageOrigin`; a non-empty base is already validated as local-or-HTTPS
+// by `assertSecureApiBase`, so it is always safe. The empty-base branch is
+// covered by the pure helper above, keeping this env-independent.
+describe("isSecureTransport", () => {
+  it("is always safe when an API base is configured (already validated)", () => {
+    expect(isSecureTransport()).toBe(true)
+  })
+})
 
 // The resolution rule is tested as a pure function so these expectations hold
 // identically with a local `frontend/.env`, without one, and in CI.

@@ -67,4 +67,39 @@ export function resolveApiBase(viteApiUrl?: string): string {
   return base
 }
 
+/**
+ * True when a page origin cannot leak a cleartext payload to a third party
+ * (CWE-319): HTTPS on any host, or loopback over HTTP.
+ *
+ * Exported as a pure function of `location` so the rule is testable without a
+ * live browser global.
+ */
+export function isSecurePageOrigin(location: {
+  protocol: string
+  hostname: string
+}): boolean {
+  return location.protocol === "https:" || isLocalhostHost(location.hostname)
+}
+
+/**
+ * True when the current transport cannot leak a cleartext payload to a third
+ * party (CWE-319). Used to gate requests that carry a sensitive key (e.g. the
+ * Tavily web-search `apiKey`) before constructing or sending them.
+ *
+ * - A non-empty API base is already validated as local-or-HTTPS by
+ *   {@link assertSecureApiBase}, so its transport is safe regardless of the
+ *   page that issued the request.
+ * - An empty base is same-origin, so transport security is the page's own
+ *   protocol (see {@link isSecurePageOrigin}): loopback is safe over HTTP, any
+ *   other host must be HTTPS.
+ *
+ * Only meaningful in a browser; non-browser contexts default to safe so the
+ * module never throws while resolving `API_BASE` at import time.
+ */
+export function isSecureTransport(): boolean {
+  if (API_BASE.trim()) return true
+  if (typeof window === "undefined") return true
+  return isSecurePageOrigin(window.location)
+}
+
 export const API_BASE = resolveApiBase(import.meta.env.VITE_API_URL)

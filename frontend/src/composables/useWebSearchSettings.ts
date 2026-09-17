@@ -51,10 +51,23 @@ export function mergeWithWebSearchDefaults(
   partial: Partial<WebSearchSettings> = {},
 ): WebSearchSettings {
   return {
-    enabled: partial.enabled ?? DEFAULT_WEB_SEARCH_SETTINGS.enabled,
+    // `??` only guards null/undefined, so a corrupted persisted field (e.g.
+    // `"apiKey": 42`) would slip through as the wrong type and later break
+    // callers that assume the declared type (e.g. `.trim()` on `apiKey`).
+    // Validate the runtime type / enum before accepting each value.
+    enabled:
+      typeof partial.enabled === "boolean"
+        ? partial.enabled
+        : DEFAULT_WEB_SEARCH_SETTINGS.enabled,
     provider: "tavily",
-    apiKey: partial.apiKey ?? DEFAULT_WEB_SEARCH_SETTINGS.apiKey,
-    searchDepth: partial.searchDepth ?? DEFAULT_WEB_SEARCH_SETTINGS.searchDepth,
+    apiKey:
+      typeof partial.apiKey === "string"
+        ? partial.apiKey
+        : DEFAULT_WEB_SEARCH_SETTINGS.apiKey,
+    searchDepth:
+      partial.searchDepth === "basic" || partial.searchDepth === "advanced"
+        ? partial.searchDepth
+        : DEFAULT_WEB_SEARCH_SETTINGS.searchDepth,
     maxResults: clampMaxResults(partial.maxResults),
   }
 }

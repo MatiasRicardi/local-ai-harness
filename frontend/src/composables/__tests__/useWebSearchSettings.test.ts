@@ -53,6 +53,62 @@ describe("mergeWithWebSearchDefaults", () => {
       mergeWithWebSearchDefaults({ maxResults: 0 }),
     ).toMatchObject({ maxResults: 1 })
   })
+
+  // Persisted localStorage is attacker-controllable and can carry wrong-shaped
+  // values (e.g. `{"enabled":true,"apiKey":42}`). `??` only guards null/
+  // undefined, so the merge must reject wrong types instead of passing them
+  // through to callers that assume the declared type (e.g. `.trim()` on apiKey).
+  describe("validates persisted field types", () => {
+    it("rejects a non-boolean enabled and falls back", () => {
+      expect(
+        mergeWithWebSearchDefaults({ enabled: 42 as unknown as boolean }),
+      ).toMatchObject({ enabled: false })
+      expect(
+        mergeWithWebSearchDefaults({ enabled: "yes" as unknown as boolean }),
+      ).toMatchObject({ enabled: false })
+    })
+
+    it("rejects a non-string apiKey and falls back", () => {
+      expect(
+        mergeWithWebSearchDefaults({ apiKey: 42 as unknown as string }),
+      ).toMatchObject({ apiKey: "" })
+      expect(
+        mergeWithWebSearchDefaults({ apiKey: null as unknown as string }),
+      ).toMatchObject({ apiKey: "" })
+    })
+
+    it("rejects an unsupported searchDepth enum and falls back", () => {
+      expect(
+        mergeWithWebSearchDefaults({ searchDepth: "hyper" as "basic" }),
+      ).toMatchObject({ searchDepth: "basic" })
+      expect(
+        mergeWithWebSearchDefaults({ searchDepth: 1 as unknown as "basic" }),
+      ).toMatchObject({ searchDepth: "basic" })
+    })
+
+    it("keeps provider fixed on tavily regardless of stored value", () => {
+      expect(
+        mergeWithWebSearchDefaults({ provider: "exa" as "tavily" }),
+      ).toMatchObject({ provider: "tavily" })
+    })
+
+    it("normalises a fully wrong-shaped payload to safe defaults", () => {
+      expect(
+        mergeWithWebSearchDefaults({
+          enabled: "yes" as unknown as boolean,
+          apiKey: 42,
+          searchDepth: 7,
+          provider: "exa",
+        } as unknown as Partial<WebSearchSettings>),
+      ).toEqual({
+        enabled: false,
+        provider: "tavily",
+        apiKey: "",
+        searchDepth: "basic",
+        maxResults: 5,
+      })
+    })
+  })
 })
 
 describe("loadWebSearchSettings / saveWebSearchSettings", () => {

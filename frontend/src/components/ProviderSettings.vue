@@ -6,7 +6,6 @@ import { useWebSearchSettings } from "../composables/useWebSearchSettings"
 
 const settings = getProviderSettings()
 const webSearch = useWebSearchSettings()
-const showApiKey = ref(false)
 
 // Reactive inline error for the Tavily key: shown next to the field when web
 // search is enabled but no key is configured. App.vue also blocks the send
@@ -278,26 +277,17 @@ const handleTest = async () => {
             Tavily API Key
             <span v-if="webSearch.settings.value.enabled" class="font-normal normal-case tracking-normal text-amber-700">(required when enabled)</span>
           </label>
-          <div class="relative">
-            <input
-              id="web-search-api-key"
-              :value="webSearch.settings.value.apiKey"
-              :type="showApiKey ? 'text' : 'password'"
-              @input="onWebSearchApiKeyInput($event)"
-              placeholder="tly-..."
-              autocomplete="off"
-              spellcheck="false"
-              class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 pr-20 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
-            />
-            <button
-              type="button"
-              @click="showApiKey = !showApiKey"
-              class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md px-2 py-1 text-[0.6875rem] font-medium text-stone-500 hover:bg-stone-100 hover:text-stone-800"
-              :aria-pressed="showApiKey"
-            >
-              {{ showApiKey ? "Hide" : "Show" }}
-            </button>
-          </div>
+          <input
+            id="web-search-api-key"
+            :value="webSearch.settings.value.apiKey"
+            type="password"
+            @input="onWebSearchApiKeyInput($event)"
+            placeholder="tly-..."
+            autocomplete="off"
+            spellcheck="false"
+            aria-autocomplete="none"
+            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
+          />
           <small v-if="webSearchMissingKey" class="warning text-[0.6875rem] font-normal leading-relaxed text-amber-700">Enter your Tavily API key to enable web search.</small>
           <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">The Tavily key is sent to your Local AI Harness backend only when Web Search is enabled.</small>
         </div>
