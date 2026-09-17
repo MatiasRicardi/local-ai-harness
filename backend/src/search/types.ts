@@ -73,6 +73,29 @@ export const webSearchRequestSchema = z.object({
 export type WebSearchRequestInput = z.infer<typeof webSearchRequestSchema>;
 
 /**
+ * Strict schema for model-supplied web-search tool arguments.
+ *
+ * The published tool definition ({@link webSearchToolDefinition}) exposes only
+ * `query` with `additionalProperties: false`, so the orchestrator must reject
+ * any argument outside that contract. Unlike `webSearchRequestSchema` this
+ * permits only `query` — it deliberately omits `maxResults` and `searchDepth`,
+ * which are owned by application/user configuration, never by the model.
+ */
+export const webSearchToolArgsSchema = z
+  .object({
+    query: z
+      .string()
+      .trim()
+      .min(1, "Query must not be empty")
+      .max(WEB_SEARCH_MAX_QUERY, `Query must not exceed ${WEB_SEARCH_MAX_QUERY} characters`),
+  })
+  // Mirror the tool definition's `additionalProperties: false`: reject any
+  // argument outside the published contract instead of silently stripping it.
+  .strict();
+
+export type WebSearchToolArgsInput = z.infer<typeof webSearchToolArgsSchema>;
+
+/**
  * Normalize a search base URL once.
  *
  * Behavior:

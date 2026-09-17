@@ -8,7 +8,7 @@ import type {
   WebSearchProvider,
   WebSearchRequest,
 } from "../search/types.js";
-import { webSearchRequestSchema } from "../search/types.js";
+import { webSearchToolArgsSchema } from "../search/types.js";
 import { AppError } from "../utils/errorHandler.js";
 import {
   WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
@@ -76,7 +76,8 @@ export const webSearchToolDefinition: ToolDefinition = {
  * call fails without ever signaling that a search started.
  */
 function validateWebSearchArgs(args: unknown): void {
-  const parsed = webSearchRequestSchema.safeParse(args);
+  // Strict tool-argument contract: only `query` is model-controllable.
+  const parsed = webSearchToolArgsSchema.safeParse(args);
   if (!parsed.success) {
     throw new AppError({
       code: "VALIDATION_ERROR",
@@ -113,7 +114,7 @@ export function createWebSearchTool(
 
       // The model only supplies the query. Application configuration owns the
       // rest, so provider-only knobs are taken from `config`, never from args.
-      const parsed = webSearchRequestSchema.parse(args);
+      const parsed = webSearchToolArgsSchema.parse(args);
       const request: WebSearchRequest = {
         query: parsed.query,
         maxResults: config.maxResults,

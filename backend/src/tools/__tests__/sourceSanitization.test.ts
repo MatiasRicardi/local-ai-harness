@@ -15,6 +15,12 @@ describe("sanitizeSourceUrl", () => {
     expect(sanitizeSourceUrl("")).toBeUndefined();
     expect(sanitizeSourceUrl("not a url")).toBeUndefined();
   });
+
+  it("rejects URLs carrying userinfo credentials", () => {
+    expect(sanitizeSourceUrl("https://user:token@example.com/path")).toBeUndefined();
+    expect(sanitizeSourceUrl("https://user@example.com/path")).toBeUndefined();
+    expect(sanitizeSourceUrl("http://user:token@example.com")).toBeUndefined();
+  });
 });
 
 describe("sanitizeSources", () => {
@@ -23,6 +29,7 @@ describe("sanitizeSources", () => {
     { id: 2, title: "Bad scheme", url: "javascript:alert(1)" },
     { id: 3, title: "No url", url: "" },
     { id: 4, title: "Bad url", url: "ht!tp://broken" },
+    { id: 5, title: "Credentials", url: "https://user:token@example.com/leak" },
   ];
 
   it("keeps only backend-grounded http(s) entries with an id", () => {

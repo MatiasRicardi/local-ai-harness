@@ -53,6 +53,14 @@ export function sanitizeSourceUrl(url: unknown): string | undefined {
     return undefined;
   }
 
+  // Reject credential-bearing URLs (CWE-200). A source URL such as
+  // `https://user:token@example.com` would otherwise flow through the sources
+  // metadata with its userinfo intact. Empty userinfo (`https://host@`) is
+  // allowed since both fields are empty.
+  if (parsed.username || parsed.password) {
+    return undefined;
+  }
+
   return trimmed;
 }
 
