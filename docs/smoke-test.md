@@ -120,10 +120,6 @@ To reach the backend directly on the host, add a
 `docker-compose.override.yml` that publishes port 3000 (documented in
 [`docs/docker.md`](docker.md)). Do not edit `docker-compose.yml` for this.
 
-To reach the backend directly on the host, add a
-`docker-compose.override.yml` that publishes port 3000 (documented in
-[`docs/docker.md`](docker.md)). Do not edit `docker-compose.yml` for this.
-
 ---
 
 ## Expected results summary
