@@ -231,6 +231,23 @@ describe("TavilySearchProvider.search", () => {
     ]);
   });
 
+  it("returns an empty array as a successful result when Tavily yields zero results", async () => {
+    // Zero results is a legitimate outcome, not an error: the tool has clear
+    // semantics for an empty result set, so the provider resolves normally.
+    const provider = new TavilySearchProvider({
+      baseUrl: "https://api.tavily.com",
+      apiKey: API_KEY,
+    });
+
+    const results = await provider.search({
+      query: "cats",
+      maxResults: 5,
+      searchDepth: "basic",
+    });
+
+    expect(results).toEqual([]);
+  });
+
   it("caps returned results to maxResults even if Tavily returns more", async () => {
     fetchMock.mockResolvedValue(
       new Response(
@@ -459,6 +476,19 @@ describe("TavilySearchProvider.search", () => {
     await expect(
       provider.search({ query: "cats", maxResults: 1, searchDepth: "basic" }),
     ).rejects.toMatchObject({ errorType: "http_error", statusCode: 500 });
+  });
+
+  it("maps a network failure to a network error", async () => {
+    fetchMock.mockRejectedValue(new TypeError("network is unreachable"));
+
+    const provider = new TavilySearchProvider({
+      baseUrl: "https://api.tavily.com",
+      apiKey: API_KEY,
+    });
+
+    await expect(
+      provider.search({ query: "cats", maxResults: 1, searchDepth: "basic" }),
+    ).rejects.toMatchObject({ errorType: "network_error" });
   });
 
   it("maps malformed JSON to a malformed response error", async () => {

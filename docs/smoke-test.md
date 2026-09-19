@@ -82,6 +82,38 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 
 4. **Test connection**, then send a message, exactly as in steps 4–7 of Flow A.
 
+## Flow C — Web search (optional, Phase 2)
+
+Web search is model-driven and requires a tool-capable local model. Before
+starting, confirm your model supports OpenAI-style tool calling (see
+[`docs/architecture.md`](architecture.md#tool-call-compatibility)); many small
+local models do **not**.
+
+1. Ensure the backend has `AI_TAVILY_BASE_URL` configured or defaulted
+   (`https://api.tavily.com`). No code change is needed to override it (see
+   step 11).
+2. Configure a tool-capable local model in **Provider Settings**, then send a
+   message to confirm tool calling works.
+3. Open **Web Search settings** (separate from provider settings) and enter your
+   Tavily API key. The key is stored only in your browser and sent to the backend
+   only while web search is enabled.
+4. Enable **Web Search**.
+5. Ask a question that needs fresh/external information (e.g. "What is the weather
+   in London today?").
+6. Verify a **Search activity** block appears (the tool ran) and that the answer
+   cites sources.
+7. Verify the **Sources** section lists the origin links.
+8. Click a source to open the original URL.
+9. Click **Stop** mid-turn and confirm generation halts (including the search).
+10. Disable **Web Search** and confirm ordinary chat still works.
+11. (Optional) Override `AI_TAVILY_BASE_URL` to a controlled test endpoint, restart
+    the backend, and confirm the search still runs through the new base URL. The
+    frontend has no field for the base URL, so it cannot be changed from the UI.
+
+> Web search uses the Tavily Search API and bills per search. Only one search is
+> allowed per user turn, and there are no automatic retries. `basic` search depth
+> is the default; `advanced` may issue more requests and consume more credits.
+
 ### Backend-only debugging
 
 To reach the backend directly on the host, add a
@@ -99,6 +131,9 @@ To reach the backend directly on the host, add a
 | Stop / cancel                | Generation halts                  |
 | Attach document + ask        | Answer references the document    |
 | Reset conversation           | Chat clears                       |
+
+| Web search turn (Flow C)     | Search activity + cited sources   |
+| Disable web search           | Ordinary chat resumes             |
 
 ## If something fails
 
