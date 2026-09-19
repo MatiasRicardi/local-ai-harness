@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { buildApp } from "../../app.js";
-import { config, overrideConfig } from "../../config/env.js";
+import { config, loadConfig, overrideConfig } from "../../config/env.js";
 import type { Tool } from "../../tools/types.js";
 import { createWebSearchTool } from "../../tools/webSearchTool.js";
 import { TavilySearchProvider } from "../../search/tavily.js";
@@ -256,7 +256,13 @@ describe("web search chat integration", () => {
 
   it("uses an overridden AI_TAVILY_BASE_URL from backend config end-to-end", async () => {
     const previous = config.TAVILY_BASE_URL;
-    overrideConfig({ TAVILY_BASE_URL: "https://custom.tavily.override.example" });
+    const previousEnv = process.env.AI_TAVILY_BASE_URL;
+    // Drive through loadConfig() so the test covers environment parsing
+    // (env -> config -> route -> provider), not just a mutation of the shared
+    // config singleton that chat.ts reads.
+    process.env.AI_TAVILY_BASE_URL = "https://custom.tavily.override.example";
+    const loaded = loadConfig();
+    overrideConfig({ TAVILY_BASE_URL: loaded.TAVILY_BASE_URL });
     try {
       app = buildApp();
       const { fetchMock, calls } = createWebSearchFetch();
@@ -277,8 +283,13 @@ describe("web search chat integration", () => {
       const tavilyCall = calls.find((call) => call.url.includes("/search"));
       expect(tavilyCall?.url).toBe("https://custom.tavily.override.example/search");
     } finally {
-      // Restore the shared config singleton for later tests.
+      // Restore the shared config singleton and env var for later tests.
       overrideConfig({ TAVILY_BASE_URL: previous });
+      if (previousEnv === undefined) {
+        delete process.env.AI_TAVILY_BASE_URL;
+      } else {
+        process.env.AI_TAVILY_BASE_URL = previousEnv;
+      }
     }
   });
 
@@ -349,6 +360,9 @@ describe("web search chat integration", () => {
     // validation before any tool_start, so the search never starts.
     expect(response.body).toContain("event: error");
     expect(response.body).toContain("VALIDATION_ERROR");
+    // The search never starts: invalid/extra tool args are rejected before any
+    // tool_start is emitted, so the SSE body carries no tool_start event.
+    expect(response.body).not.toContain("event: tool_start");
     // No Tavily call is made: the malicious tool arguments are rejected before
     // the provider is ever contacted.
     expect(calls.find((call) => call.url.includes("/search"))).toBeUndefined();
