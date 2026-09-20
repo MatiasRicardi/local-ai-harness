@@ -4,7 +4,7 @@ Local AI Harness is a simple web interface for chatting with local AI models thr
 
 I built it because I wanted a clean way to experiment with local LLMs from a browser, connect different model servers, attach documents, and try local AI workflows without depending on a hosted AI service.
 
-Current release: `v1.0.0`
+Current release: `v1.1.0`
 
 > Local AI Harness is mainly designed as a local, single-user developer tool. It is not intended to be exposed as a hardened multi-user production service.
 
@@ -21,6 +21,7 @@ Right now, Local AI Harness supports:
 - Using extracted document text as conversation context
 - Configuring the model context size
 - Resetting and starting a new conversation
+- Web search through the model (Tavily), with a sources UI
 - Running locally with pnpm or Docker Compose
 
 ## Tech stack
@@ -118,6 +119,42 @@ Currently supported:
 
 PDF support is limited to files with selectable text. OCR is not included.
 
+## Web search
+
+Web search is **optional and disabled by default**. It is model-driven: your model
+itself decides when to call a `web_search` tool, so it requires a local model and
+server that support OpenAI-style tool calling. Not every local model does — see the
+[tool-call compatibility](docs/architecture.md#tool-call-compatibility) note in the
+architecture docs before relying on it.
+
+Web search starts with **Tavily** as the first provider. To use it:
+
+1. Create a Tavily account and generate an API key.
+2. Run Local AI Harness (`pnpm dev` or `docker compose up --build`).
+3. Open **Web Search settings** (separate from Provider Settings) and paste your key.
+   The key is stored only in your browser and is sent to the backend only while web
+   search is enabled.
+4. Enable **Web Search**.
+5. Choose a search depth — `basic` (default) or `advanced`.
+6. Ask a question that needs fresh or external information (for example, "What is the
+   weather in London today?").
+
+The answer cites the sources it used, and the **Sources** section lists the origin
+links. You can stop a turn mid-search with **Stop**.
+
+A few things worth knowing:
+
+- The Tavily **Base URL is backend-configurable** through `AI_TAVILY_BASE_URL`
+  (default `https://api.tavily.com`). It is **not** exposed in the normal UI, and it
+  is never hardcoded inside the provider — it is injected through configuration.
+- Web content is untrusted external data: results are treated as reference material,
+  not instructions, and no arbitrary result URLs are fetched. See the
+  [security](docs/security.md) docs.
+- Tavily bills per search (see the [official Tavily docs](https://docs.tavily.com/documentation/pricing) for current pricing). Only one search is allowed per user turn, with no automatic retries; `advanced` depth may consume more credits than `basic`.
+
+If you prefer a different provider later, the search layer is built as a pluggable
+provider, so additional providers can be added without changing the chat flow.
+
 ## AI-assisted development
 
 I used local LLMs as coding assistants while building this project.
@@ -141,14 +178,14 @@ If you want to look deeper into how the project works:
 
 ## Roadmap
 
-After `v1.0.0`, there are a few things I would like to explore:
+After `v1.1.0`, there are a few things I would like to explore:
 
-- Web search, starting with a pluggable provider such as Tavily
-- Tool calling
 - Multiple documents and RAG
 - Conversation persistence
 - More local model runtimes
 - OCR support
+- Additional web-search providers beyond Tavily
+- Multi-step research and more tools
 
 ## License
 

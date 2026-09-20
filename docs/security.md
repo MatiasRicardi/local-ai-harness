@@ -92,6 +92,33 @@ closing the same CWE-319 gap for search base URLs.
 - `VITE_API_URL` is a **build-time** value inlined into the bundle; it is never a
   runtime-injected remote endpoint.
 
+### 9. Web search security
+
+Web search is **disabled by default** and only runs when the user enables it and the
+model invokes `web_search`.
+
+- **API key ownership and scope.** The Tavily API key is entered by the user in the
+  frontend **Web Search settings**, stored only in the browser, and sent to the backend
+  **only while web search is enabled**. It is request-scoped: the backend never logs or
+  persists it, and it is never echoed back through SSE events, assistant messages, error
+  details, or source metadata.
+- **Backend-owned, configurable Base URL.** The Tavily endpoint comes from the
+  backend configuration `AI_TAVILY_BASE_URL` (default `https://api.tavily.com`), not
+  from the frontend UI (there is no field for it) and not hardcoded in the provider. The
+  provider receives it by dependency/config injection. Both the config validator and the
+  provider require `https://`, closing the CWE-319 gap for the search path.
+- **External content is untrusted.** Web-search results are treated as untrusted
+  external data, never as system/developer instructions. The backend never follows
+  instructions found in results, and **no arbitrary result URLs are fetched** — only the
+  normalized sources (id, title, url) returned by the search API are surfaced.
+- **Query leaves the local environment.** Model inference can remain local, but when Web
+  Search is enabled and the model invokes `web_search`, the search query is sent to the
+  configured Tavily endpoint. This is why web search should not be described as fully
+  local.
+- **Prompt-injection and external links.** Because results are untrusted, they carry a
+  prompt-injection risk and contain external links. Sources are rendered as links the user
+  can open, and result content is sanitized.
+
 ## Out of scope (by design)
 
 These are intentionally **not** implemented and are documented as such:
