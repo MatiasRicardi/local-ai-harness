@@ -303,9 +303,11 @@ function dispatchEvent(
         callbacks.onDone()
         return true
       case "error": {
-        // Mid-stream provider error carrying the stable backend code.
+        // Mid-stream provider error carrying the stable backend code. This is
+        // terminal: mark the stream completed so the EOF path does not also
+        // call onDone() (a false success after the error was already reported).
         callbacks.onError(parseStreamErrorData(parsed))
-        break
+        return true
       }
       case "tool_start": {
         // Optional callback: ignore when the UI does not observe tool events.

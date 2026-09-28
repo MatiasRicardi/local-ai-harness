@@ -224,7 +224,13 @@ export class SseParser {
     let currentEventLines: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+      // Normalize CRLF incrementally: splitting a CRLF stream on "\n" leaves a
+      // trailing "\r" on every line, so a blank line (the event separator)
+      // becomes "\r" and never matches `line === ""`, while a `data:` value
+      // keeps a trailing "\r" that breaks JSON parsing. Strip it per line so
+      // both the separator detection and the data value are correct regardless
+      // of whether the provider uses LF or CRLF line endings.
+      const line = lines[i].replace(/\r$/, "");
 
       if (line === "") {
         // Empty line → end of current SSE event

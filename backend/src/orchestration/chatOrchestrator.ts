@@ -13,6 +13,11 @@ import {
   truncateContentPreservingStructure,
 } from "../context/toolResultBudget.js";
 import { validateToolCalls, type ResolvedToolCall } from "./toolCallValidation.js";
+import {
+  WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
+  formatSourceBlock,
+  type WebSearchSource,
+} from "../tools/webSearchFormat.js";
 
 // ── Chat orchestration loop ──────────────────────────────────────────────────
 //
@@ -72,6 +77,79 @@ type RoundOutcome =
 
 function sanitizeSseData(text: string): string {
   return text.replace(/\u0000/g, "");
+}
+
+/**
+ * Extract the structured per-source blocks the web-search tool emits.
+ *
+ * The tool stores one entry per result in `metadata.sources`, each carrying the
+ * exact `id`, `title`, `url` and `content` used to render its `[id]`-prefixed
+ * block (see webSearchFormat). A source is kept only when it has this full,
+ * well-formed shape; anything else (other tools, partial or untrusted metadata)
+ * yields no blocks, so the delivered-id logic stays scoped to the web-search
+ * content layout instead of trusting arbitrary metadata.
+ *
+ * @param value raw `metadata.sources` from the tool result
+ * @returns the well-formed structured sources, in block order
+ */
+function toStructuredSources(value: unknown): WebSearchSource[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const sources: WebSearchSource[] = [];
+  for (const entry of value) {
+    const source = entry as {
+      id?: unknown;
+      title?: unknown;
+      url?: unknown;
+      content?: unknown;
+    };
+    if (
+      typeof source?.id === "number" &&
+      Number.isFinite(source.id) &&
+      typeof source?.title === "string" &&
+      typeof source?.url === "string" &&
+      typeof source?.content === "string"
+    ) {
+      sources.push({ id: source.id, title: source.title, url: source.url, content: source.content });
+    }
+  }
+  return sources;
+}
+
+/**
+ * Which source IDs actually entered the model's round-2 context.
+ *
+ * The full web content is the untrusted marker followed by one exact
+ * `[id]`-prefixed block per source (see webSearchFormat), joined by a blank
+ * line. `toolResultContent` is that content cut at a blank-line boundary, so
+ * every block start and end lands on that boundary. A source is delivered iff
+ * its whole block fits within the truncated content, computed from the known
+ * block lengths and positions — never by re-parsing the untrusted body.
+ *
+ * This keeps source IDs as structured metadata: a blank-line paragraph inside
+ * another source's body (for example a `[2]\nTitle:` mention in source 1) can
+ * never be mistaken for a delivered source, and a source dropped by truncation
+ * is excluded. The set stays consistent with what the model actually received.
+ *
+ * @param sources structured sources in block order (see {@link toStructuredSources})
+ * @param toolResultContent the (possibly truncated) content sent to the model
+ * @returns the set of source IDs whose blocks were delivered
+ */
+function deliveredSourceIds(sources: WebSearchSource[], toolResultContent: string): Set<number> {
+  const delivered = new Set<number>();
+  const markerLength = WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length;
+  const contentLength = toolResultContent.length;
+  let offset = markerLength + "\n\n".length;
+  for (const source of sources) {
+    const block = formatSourceBlock(source);
+    const blockEnd = offset + block.length;
+    if (blockEnd <= contentLength) {
+      delivered.add(source.id);
+    }
+    offset = blockEnd + "\n\n".length;
+  }
+  return delivered;
 }
 
 export class ChatOrchestrator {
@@ -209,15 +287,21 @@ export class ChatOrchestrator {
       return;
     }
 
-    // Success: emit the tool lifecycle tail before the final answer. The
-    // sanitized sources are backend-grounded (only safe http(s) URLs with a
-    // numeric id survive) and never carry `content`; `resultCount` equals the
-    // number of sources actually emitted, including when that is zero.
+    // Success: emit the tool lifecycle tail before the final answer. Emit only
+    // the sources whose blocks actually entered the model's round-2 context
+    // (see `includedSourceIds`): the tool-result content is budgeted and may be
+    // truncated, so a source emitted to the UI but never sent to the model must
+    // not be surfaced. `resultCount` matches the number of sources emitted,
+    // including when that is zero.
     const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    yield { type: "tool_end", name: tool.definition.name, resultCount: sanitizedSources.length };
-    yield { type: "sources", sources: sanitizedSources };
-
-    const round2Messages = await this.buildRound2Messages(input, call, result);
+    const { messages: round2Messages, delivered } = await this.buildRound2Messages(
+      input,
+      call,
+      result,
+    );
+    const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
+    yield { type: "tool_end", name: tool.definition.name, resultCount: deliveredSources.length };
+    yield { type: "sources", sources: deliveredSources };
 
     yield* this.streamRoundLive({
       providerConfig: input.providerConfig,
@@ -236,7 +320,7 @@ export class ChatOrchestrator {
     input: ChatOrchestrationInput,
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
-  ): Promise<ProviderRequestMessage[]> {
+  ): Promise<{ messages: ProviderRequestMessage[]; delivered: Set<number> }> {
     const webContent = result.content;
 
     // Fixed round-2 content: the original conversation plus the overhead of the
@@ -273,6 +357,16 @@ export class ChatOrchestrator {
       ? truncateContentPreservingStructure(webContent, budget.includedWebCharacters)
       : webContent;
 
+    // Report only the sources whose blocks are actually present in the (possibly
+    // truncated) content sent to the model, so the emitted `sources` event and
+    // `tool_end.resultCount` stay consistent with the delivered content. The set
+    // is derived from complete block boundaries, not from a substring search of
+    // the (untrusted) body.
+    const structuredSources = webContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
+      ? toStructuredSources(result.metadata?.sources)
+      : [];
+    const delivered = deliveredSourceIds(structuredSources, toolResultContent);
+
     const assistantToolCallMessage: ProviderRequestMessage = {
       role: "assistant",
       tool_calls: [
@@ -289,7 +383,10 @@ export class ChatOrchestrator {
       content: toolResultContent,
     };
 
-    return [...input.messages, assistantToolCallMessage, toolResultMessage];
+    return {
+      messages: [...input.messages, assistantToolCallMessage, toolResultMessage],
+      delivered,
+    };
   }
 
   /**

@@ -1,9 +1,9 @@
 # AGENTS.md — Local AI Harness
 
-Context and mandatory rules for coding agents. Current release: **v1.0.0**.
+Context and mandatory rules for coding agents. Current release: **v1.1.0**.
 
 * Phase 1 = `instructions/phase1/` steps 01–25 — complete (historical reference).
-* Phase 2 = `instructions/phase2/` steps 26–36 — planned: optional model-driven web search on a generic tool foundation → `v1.1.0`. Read `README-phase2-roadmap.md` before implementing; its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) are fixed.
+* Phase 2 = `instructions/phase2/` steps 26–36 — complete: optional model-driven web search on a generic tool foundation shipped in `v1.1.0`. Its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) are fixed.
 * `instructions/` is gitignored (local planning files).
 * Deep detail lives in `docs/` — read it there instead of duplicating it here.
 
@@ -13,7 +13,9 @@ Local, **single-user** developer web app for chatting with locally hosted LLMs t
 
 v1.0.0 ships: provider connection test, SSE streaming with stop/cancel, sanitized Markdown, one attached TXT/MD/PDF used as chat context, context-size configuration + document truncation, conversation reset, structured errors end to end, temporary files with guaranteed cleanup, Vitest in both packages, Tailwind CSS v4 UI, Docker Compose behind a same-origin `/api` proxy.
 
-Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence, web search, tool calling.
+Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence.
+
+Web search (Tavily) and the generic tool-calling foundation shipped in v1.1.0: the backend drives a single model-invoked `web_search` tool through a `ToolRegistry`, streams `tool_start`/`tool_end`/`sources` lifecycle events, and the UI shows search activity and source links. Tool calling follows the OpenAI-compatible tool schema the model returns; whether a given local model issues tool calls is up to that model/server (see `docs/architecture.md`).
 
 ## Layout
 

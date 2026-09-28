@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../app.js";
+import pkg from "../../package.json" with { type: "json" };
 
 describe("app", () => {
   it("builds a Fastify instance", () => {
@@ -29,6 +30,6 @@ describe("health endpoint", () => {
     const body = JSON.parse(response.body);
     expect(body).toHaveProperty("status", "ok");
     expect(body).toHaveProperty("name", "Local AI Harness");
-    expect(body).toHaveProperty("version", "1.0.0");
+    expect(body).toHaveProperty("version", pkg.version);
   });
 });

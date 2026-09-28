@@ -21,6 +21,8 @@ describe("isSecurePageOrigin", () => {
     expect(isSecurePageOrigin({ protocol: "http:", hostname: "localhost" })).toBe(
       true,
     )
+    // Bracketed IPv6 hostname as returned by new URL() for http://[::1]:…
+    expect(isSecurePageOrigin({ protocol: "http:", hostname: "[::1]" })).toBe(true)
   })
 
   it("rejects a non-local host over HTTP (cleartext key exposure, CWE-319)", () => {
@@ -30,13 +32,25 @@ describe("isSecurePageOrigin", () => {
   })
 })
 
-// `isSecureTransport` gates the same-origin (empty API_BASE) case on
-// `isSecurePageOrigin`; a non-empty base is already validated as local-or-HTTPS
-// by `assertSecureApiBase`, so it is always safe. The empty-base branch is
-// covered by the pure helper above, keeping this env-independent.
+// `isSecureTransport` gates the same-origin (relative API_BASE) case on
+// `isSecurePageOrigin`; an absolute base is already validated as local-or-HTTPS
+// by `assertSecureApiBase`, so it is always safe. The relative-base branch
+// delegates to the pure `isSecurePageOrigin` helper, so its page-origin rule is
+// tested there directly — passing the origin as a parameter rather than
+// redefining `window.location`, which is non-configurable in jsdom.
 describe("isSecureTransport", () => {
-  it("is always safe when an API base is configured (already validated)", () => {
-    expect(isSecureTransport()).toBe(true)
+  it("is always safe when an absolute API base is configured (already validated)", () => {
+    // An absolute base is validated as local-or-HTTPS by assertSecureApiBase,
+    // so its transport is safe regardless of the page.
+    expect(isSecureTransport("https://api.example.test")).toBe(true)
+    expect(isSecureTransport("http://127.0.0.1:3000")).toBe(true)
+  })
+
+  it("is safe from loopback over HTTP with the default same-origin base", () => {
+    // A relative/empty base stays on the page origin, so its transport security
+    // is the page's own protocol, asserted via the pure isSecurePageOrigin helper
+    // above (kept independent of the non-configurable jsdom window.location).
+    expect(isSecurePageOrigin({ protocol: "http:", hostname: "localhost" })).toBe(true)
   })
 })
 

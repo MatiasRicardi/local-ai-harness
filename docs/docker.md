@@ -62,10 +62,10 @@ Browser  →  http://127.0.0.1:8080
                                                 (model server running on the host)
 ```
 
-| Service  | Image                              | Published port | Internal address  |
-| -------- | ---------------------------------- | -------------- | ----------------- |
-| frontend | `local-ai-harness-frontend:local`  | `8080:80`      | —                 |
-| backend  | `local-ai-harness-backend:local`   | not published  | `backend:3000`    |
+| Service  | Image                              | Published port     | Internal address  |
+| -------- | ---------------------------------- | ----------------- | ----------------- |
+| frontend | `local-ai-harness-frontend:local`  | `127.0.0.1:8080:80` | —                 |
+| backend  | `local-ai-harness-backend:local`   | not published      | `backend:3000`    |
 
 Both services build from the **repository root** because the Step 24.1
 Dockerfiles need the pnpm workspace manifests and the frozen lockfile, which
@@ -91,10 +91,26 @@ resolve Docker service DNS names. The browser stays on its own origin and nginx
 performs the internal hop. That is also why no CORS change was needed: see
 [CORS](#cors).
 
-### Backend publishing and debug access
+### Publish surface (loopback only)
 
-Only the frontend is published. `http://127.0.0.1:8080/api/health` is the normal
-host-facing health check, and it proves `host → nginx → Docker DNS → backend`.
+Only the frontend is published, and it is bound to **loopback**
+(`127.0.0.1:8080:80` in `docker-compose.yml`), not to `0.0.0.0`. Publishing on
+all interfaces would expose the UI — and the `/api` proxy that forwards
+provider API keys to the backend — to every network interface on the host.
+Binding to `127.0.0.1` keeps that surface reachable only from the host itself,
+which is the intended local-development exposure. Reach the app at
+`http://127.0.0.1:8080`.
+
+Host-only isolation via `127.0.0.1` requires **Docker Engine 28.0.0 or newer**.
+On older engines a port published to `127.0.0.1` can still be reached by hosts
+on the same local-area (L2) network, so the frontend and its `/api` proxy
+(forwards provider API keys) would leak beyond the host. On Engine < 28.0.0 add
+host firewall rules to block that access, or run this compose stack only on a
+trusted network.
+
+The backend port is intentionally not published at all: the frontend proxy
+reaches it as `backend:3000` on the Compose network, and host health checks go
+through `http://127.0.0.1:8080/api/health`.
 
 To reach the backend directly while debugging, create a local
 `docker-compose.override.yml` (Compose merges it automatically; do not edit
@@ -304,7 +320,7 @@ without musl/glibc risk; the tag is a fixed major tag, digests are not pinned.
 
 ```bash
 docker build -f frontend/Dockerfile -t local-ai-harness-frontend:local .
-docker run --rm -p 8080:80 local-ai-harness-frontend:local
+docker run --rm -p 127.0.0.1:8080:80 local-ai-harness-frontend:local
 curl -i http://127.0.0.1:8080/          # index.html
 curl -I http://127.0.0.1:8080/assets/index-<hash>.js
 ```

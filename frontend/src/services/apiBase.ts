@@ -94,22 +94,35 @@ export function isSecurePageOrigin(location: {
 }
 
 /**
+ * True when `value` is an absolute URL carrying a protocol (http/https/file/
+ * …). A relative base (empty, or a leading-slash path such as "/backend") has
+ * no protocol and resolves against the current origin at request time.
+ */
+function isAbsoluteUrl(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(value)
+}
+
+/**
  * True when the current transport cannot leak a cleartext payload to a third
  * party (CWE-319). Used to gate requests that carry a sensitive key (e.g. the
  * Tavily web-search `apiKey`) before constructing or sending them.
  *
- * - A non-empty API base is already validated as local-or-HTTPS by
- *   {@link assertSecureApiBase}, so its transport is safe regardless of the
- *   page that issued the request.
- * - An empty base is same-origin, so transport security is the page's own
- *   protocol (see {@link isSecurePageOrigin}): loopback is safe over HTTP, any
- *   other host must be HTTPS.
+ * - An absolute base (http/https://host) is already validated as local-or-HTTPS
+ *   by {@link assertSecureApiBase}, so its transport is safe regardless of the
+ *   page that issued the request. A protocol-relative base ("//attacker") is
+ *   rejected by that same guard, so it can never reach here.
+ * - A relative base (empty, or a leading-slash path such as "/backend") is
+ *   same-origin, so its transport security is the page's own protocol (see
+ *   {@link isSecurePageOrigin}): loopback is safe over HTTP, any other host must
+ *   be HTTPS. This is the case the guard must not skip — a same-origin request
+ *   from an HTTP page to a remote host would otherwise be treated as safe.
  *
  * Only meaningful in a browser; non-browser contexts default to safe so the
  * module never throws while resolving `API_BASE` at import time.
  */
-export function isSecureTransport(): boolean {
-  if (API_BASE.trim()) return true
+export function isSecureTransport(viteApiUrl: string = API_BASE): boolean {
+  const base = viteApiUrl.trim()
+  if (base && isAbsoluteUrl(base)) return true
   if (typeof window === "undefined") return true
   return isSecurePageOrigin(window.location)
 }

@@ -100,6 +100,13 @@ function buildWebSearchRegistry(webSearch: WebSearchConfig | undefined): ToolReg
  * assistant response. Provider HTTP behavior and errors remain inside the client.
  */
 const chat: FastifyPluginAsync = async (server) => {
+  // NOTE on request timeout (AI_REQUEST_TIMEOUT_MS): this value is referenced
+  // only in the files route (as a currently-unconsumed route config) and is
+  // deliberately NOT applied to the chat routes here. Applying it to the
+  // non-streaming route would require aborting the upstream provider request on
+  // timeout (not currently wired), and applying it to the streaming route would
+  // cut valid completions short (default 60s < 120s provider timeout). See the
+  // PR notes for the open design decision.
   server.post("/api/chat", async (request, reply) => {
     // Validate request payload using Zod schema
     const result = chatRequestSchema.safeParse(request.body);
@@ -165,7 +172,7 @@ const chat: FastifyPluginAsync = async (server) => {
           baseUrl: provider.baseUrl,
           model: provider.model,
           apiKey: provider.apiKey,
-          timeoutMs: provider.timeoutMs,
+          timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
         },
         allMessages,
       );
@@ -349,7 +356,7 @@ const chat: FastifyPluginAsync = async (server) => {
             baseUrl: provider.baseUrl,
             model: provider.model,
             apiKey: provider.apiKey,
-            timeoutMs: provider.timeoutMs,
+            timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
           },
           messages: orchestratedMessages,
           tools: webSearchRegistry,
@@ -400,7 +407,7 @@ const chat: FastifyPluginAsync = async (server) => {
           baseUrl: provider.baseUrl,
           model: provider.model,
           apiKey: provider.apiKey,
-          timeoutMs: provider.timeoutMs,
+          timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
         },
         allMessages,
         { signal: clientDisconnect.signal },
