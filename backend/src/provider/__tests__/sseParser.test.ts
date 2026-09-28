@@ -361,6 +361,52 @@ describe("SseParser - Edge cases", () => {
 
 // ── parseSseStream convenience function tests ────────────────────────────────
 
+describe("CRLF line endings", () => {
+  it("parses a CRLF stream and detects the blank-line event separator", async () => {
+    // A provider that uses CRLF must yield the same events as an LF stream.
+    const reader = createReader(
+      'data: {"choices":[{"delta":{"content":"Hola"}}]}\r\n\r\ndata: [DONE]\r\n',
+    );
+    const events = await parseSseStream(reader);
+    expect(events).toHaveLength(2); // delta + done
+    expect(events[0].type).toBe("delta");
+    if (events[0].type === "delta") {
+      expect(events[0].text).toBe("Hola");
+    }
+    expect(events[1].type).toBe("done");
+  });
+
+  it("handles [DONE] after CRLF without leaking raw JSON or a spurious EOF error", async () => {
+    // Regression: with CRLF the blank line before [DONE] split to "\r", so the
+    // two events merged into one delta carrying the raw JSON + "[DONE]" and the
+    // stream then ended without a proper [DONE]. Must be delta + done only.
+    const reader = createReader(
+      'data: {"choices":[{"delta":{"content":"Hola"}}]}\r\n\r\ndata: [DONE]\r\n',
+    );
+    const events = await parseSseStream(reader);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe("delta");
+    expect(events[1].type).toBe("done");
+  });
+
+  it("normalizes CRLF when the blank-line separator is split across chunks", async () => {
+    // The double-newline event separator is cut mid-way by a chunk boundary,
+    // with CRLF endings, and must still be recognized once reassembled.
+    const reader = createMultiChunkReader([
+      'data: {"choices":[{"delta":{"content":"A"}}]}\r\n',
+      '\r',
+      '\ndata: [DONE]\r\n',
+    ]);
+    const events = await parseSseStream(reader);
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe("delta");
+    if (events[0].type === "delta") {
+      expect(events[0].text).toBe("A");
+    }
+    expect(events[1].type).toBe("done");
+  });
+});
+
 describe("parseSseStream", () => {
   it("returns empty array for empty stream", async () => {
     const reader = createReader("");

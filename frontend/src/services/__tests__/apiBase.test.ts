@@ -30,13 +30,59 @@ describe("isSecurePageOrigin", () => {
   })
 })
 
-// `isSecureTransport` gates the same-origin (empty API_BASE) case on
-// `isSecurePageOrigin`; a non-empty base is already validated as local-or-HTTPS
-// by `assertSecureApiBase`, so it is always safe. The empty-base branch is
+// `isSecureTransport` gates the same-origin (relative API_BASE) case on
+// `isSecurePageOrigin`; an absolute base is already validated as local-or-HTTPS
+// by `assertSecureApiBase`, so it is always safe. The relative-base branch is
 // covered by the pure helper above, keeping this env-independent.
 describe("isSecureTransport", () => {
-  it("is always safe when an API base is configured (already validated)", () => {
-    expect(isSecureTransport()).toBe(true)
+  it("is always safe when an absolute API base is configured (already validated)", () => {
+    // An absolute base is validated as local-or-HTTPS by assertSecureApiBase,
+    // so its transport is safe regardless of the page.
+    expect(isSecureTransport("https://api.example.test")).toBe(true)
+    expect(isSecureTransport("http://127.0.0.1:3000")).toBe(true)
+  })
+
+  function withPageOrigin(
+    origin: { protocol: string; hostname: string },
+    fn: () => void,
+  ): void {
+    const descriptor = Object.getOwnPropertyDescriptor(window, "location")
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: origin,
+    })
+    try {
+      fn()
+    } finally {
+      Object.defineProperty(window, "location", descriptor ?? {
+        configurable: true,
+        writable: true,
+        value: window.location,
+      })
+    }
+  }
+
+  it("checks the page origin for a same-origin relative base (CWE-319)", () => {
+    // A relative base resolves against the current origin, so an insecure
+    // (HTTP, remote) page would send the key over cleartext — the guard must
+    // NOT treat it as safe just because the base is non-empty.
+    withPageOrigin({ protocol: "http:", hostname: "api.example.test" }, () => {
+      expect(isSecureTransport("/backend")).toBe(false)
+      expect(isSecureTransport("")).toBe(false)
+    })
+  })
+
+  it("allows a same-origin relative base from a safe (HTTPS) page", () => {
+    withPageOrigin({ protocol: "https:", hostname: "app.example.test" }, () => {
+      expect(isSecureTransport("/backend")).toBe(true)
+    })
+  })
+
+  it("is safe from loopback over HTTP with the default same-origin base", () => {
+    withPageOrigin({ protocol: "http:", hostname: "localhost" }, () => {
+      expect(isSecureTransport()).toBe(true)
+    })
   })
 })
 

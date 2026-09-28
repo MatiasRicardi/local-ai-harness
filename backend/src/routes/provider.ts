@@ -3,6 +3,7 @@ import { OpenAICompatibleClient } from "../provider/client.js";
 import { chatMessagesSchema, providerConfigSchema } from "../provider/schemas.js";
 import { z } from "zod";
 import { AppError, normalizeError } from "../utils/errorHandler.js";
+import { config } from "../config/env.js";
 
 /**
  * Zod schema for provider test payload validation.
@@ -44,8 +45,9 @@ const providerTest: FastifyPluginAsync = async (server) => {
         },
       ]);
 
-      // Send the chat completion request with timeout
-      const timeoutMs = payload.timeout ?? 120_000;
+      // Send the chat completion request with timeout. Fall back to the
+      // configured default when the request omits one.
+      const timeoutMs = payload.timeout ?? config.DEFAULT_PROVIDER_TIMEOUT_MS;
 
       const response = await client.chat(
         {

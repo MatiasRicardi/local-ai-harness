@@ -14,6 +14,26 @@ const webSearchMissingKey = computed(
   () => webSearch.settings.value.enabled && !webSearch.settings.value.apiKey.trim(),
 )
 
+// True when the configured provider base URL is a cleartext (http://) target on
+// a non-local host: the stored apiKey (and any conversation contents forwarded
+// to the provider) would be sent over an unencrypted connection (CWE-319).
+// Loopback and HTTPS targets are safe. The backend accepts http:// by design (a
+// provider may be a local llama.cpp/Ollama server), so this is a warning, not a
+// block — the user may intend a LAN/local setup.
+const providerBaseUrlInsecure = computed(() => {
+  const base = state.value.baseUrl.trim()
+  if (!base) return false
+  let parsed: URL
+  try {
+    parsed = new URL(base)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== "http:") return false
+  const host = parsed.hostname.toLowerCase()
+  return host !== "localhost" && host !== "127.0.0.1" && host !== "::1"
+})
+
 function onWebSearchToggle(event: Event): void {
   webSearch.updateWebSearchSettings({ enabled: (event.target as HTMLInputElement).checked })
 }
@@ -173,6 +193,24 @@ const handleTest = async () => {
           placeholder="http://localhost:8080/v1"
           class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
         />
+        <p
+          v-if="providerBaseUrlInsecure"
+          class="flex items-start gap-1.5 text-[0.6875rem] text-amber-700"
+        >
+          <svg
+            class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 fill-amber-500"
+            viewBox="0 0 20 20"
+            aria-hidden="true"
+          >
+            <path
+              d="M10 2a7 7 0 100 14 7 7 0 000-14zM9 5a1 1 0 112 0v4a1 1 0 11-2 0V5zm1 11a1.25 1.25 0 110 2.5A1.25 1.25 0 019 16z"
+            />
+          </svg>
+          <span>
+            The provider URL is HTTP to a remote host; the API key and messages
+            are sent unencrypted. Use HTTPS, or point this at a local server.
+          </span>
+        </p>
       </div>
 
       <div class="form-group flex flex-col gap-1.5">

@@ -74,6 +74,27 @@ function sanitizeSseData(text: string): string {
   return text.replace(/\u0000/g, "");
 }
 
+/**
+ * Which sources actually entered the model's round-2 context.
+ *
+ * `toolResultContent` is the (possibly truncated) tool-result body sent to the
+ * model. Each source is rendered as one `[id]`-prefixed block (see
+ * webSearchFormat) and truncation keeps whole blocks (never cuts mid-block), so
+ * a source was delivered to the model iff its block is present in
+ * `toolResultContent`. A source emitted to the UI but dropped by truncation is
+ * therefore excluded, keeping `sources`/`resultCount` consistent with what the
+ * model actually received.
+ */
+function deliveredSourceIds(sources: SourceRef[], toolResultContent: string): Set<number> {
+  const delivered = new Set<number>();
+  for (const source of sources) {
+    if (toolResultContent.includes(`[${source.id}]\nTitle:`)) {
+      delivered.add(source.id);
+    }
+  }
+  return delivered;
+}
+
 export class ChatOrchestrator {
   private readonly client: ProviderClient;
 
@@ -209,15 +230,21 @@ export class ChatOrchestrator {
       return;
     }
 
-    // Success: emit the tool lifecycle tail before the final answer. The
-    // sanitized sources are backend-grounded (only safe http(s) URLs with a
-    // numeric id survive) and never carry `content`; `resultCount` equals the
-    // number of sources actually emitted, including when that is zero.
+    // Success: emit the tool lifecycle tail before the final answer. Emit only
+    // the sources whose blocks actually entered the model's round-2 context
+    // (see `includedSourceIds`): the tool-result content is budgeted and may be
+    // truncated, so a source emitted to the UI but never sent to the model must
+    // not be surfaced. `resultCount` matches the number of sources emitted,
+    // including when that is zero.
     const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    yield { type: "tool_end", name: tool.definition.name, resultCount: sanitizedSources.length };
-    yield { type: "sources", sources: sanitizedSources };
-
-    const round2Messages = await this.buildRound2Messages(input, call, result);
+    const { messages: round2Messages, deliveredSourceIds } = await this.buildRound2Messages(
+      input,
+      call,
+      result,
+    );
+    const deliveredSources = sanitizedSources.filter((source) => deliveredSourceIds.has(source.id));
+    yield { type: "tool_end", name: tool.definition.name, resultCount: deliveredSources.length };
+    yield { type: "sources", sources: deliveredSources };
 
     yield* this.streamRoundLive({
       providerConfig: input.providerConfig,
@@ -236,7 +263,7 @@ export class ChatOrchestrator {
     input: ChatOrchestrationInput,
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
-  ): Promise<ProviderRequestMessage[]> {
+  ): Promise<{ messages: ProviderRequestMessage[]; deliveredSourceIds: Set<number> }> {
     const webContent = result.content;
 
     // Fixed round-2 content: the original conversation plus the overhead of the
@@ -273,6 +300,14 @@ export class ChatOrchestrator {
       ? truncateContentPreservingStructure(webContent, budget.includedWebCharacters)
       : webContent;
 
+    // Report only the sources whose blocks are actually present in the (possibly
+    // truncated) content sent to the model, so the emitted `sources` event and
+    // `tool_end.resultCount` stay consistent with the delivered content.
+    const delivered = deliveredSourceIds(
+      sanitizeSources(result.metadata?.sources),
+      toolResultContent,
+    );
+
     const assistantToolCallMessage: ProviderRequestMessage = {
       role: "assistant",
       tool_calls: [
@@ -289,7 +324,10 @@ export class ChatOrchestrator {
       content: toolResultContent,
     };
 
-    return [...input.messages, assistantToolCallMessage, toolResultMessage];
+    return {
+      messages: [...input.messages, assistantToolCallMessage, toolResultMessage],
+      deliveredSourceIds: delivered,
+    };
   }
 
   /**

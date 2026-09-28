@@ -219,6 +219,20 @@ describe("streamChat", () => {
     expect(error.message).toBe("slow down")
   })
 
+  it("treats a stream error event as terminal and does not call onDone on EOF", async () => {
+    const callbacks = noopCallbacks()
+    // An error event followed by the natural EOF (no `done` SSE event). The
+    // error must be terminal: the EOF path must NOT fire onDone() a second time
+    // as a false success after onError() already reported the failure.
+    const sse = "event: error\ndata: {\"code\":\"PROVIDER_TIMEOUT\",\"message\":\"slow down\"}\n\n"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    expect(callbacks.onError).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDone).not.toHaveBeenCalled()
+  })
+
   it("calls onError (not throw) for an HTTP error response before the stream starts", async () => {
     const callbacks = noopCallbacks()
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(

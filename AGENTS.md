@@ -13,7 +13,9 @@ Local, **single-user** developer web app for chatting with locally hosted LLMs t
 
 v1.0.0 ships: provider connection test, SSE streaming with stop/cancel, sanitized Markdown, one attached TXT/MD/PDF used as chat context, context-size configuration + document truncation, conversation reset, structured errors end to end, temporary files with guaranteed cleanup, Vitest in both packages, Tailwind CSS v4 UI, Docker Compose behind a same-origin `/api` proxy.
 
-Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence, web search, tool calling.
+Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence.
+
+Web search (Tavily) and the generic tool-calling foundation shipped in v1.1.0: the backend drives a single model-invoked `web_search` tool through a `ToolRegistry`, streams `tool_start`/`tool_end`/`sources` lifecycle events, and the UI shows search activity and source links. Tool calling follows the OpenAI-compatible tool schema the model returns; whether a given local model issues tool calls is up to that model/server (see `docs/architecture.md`).
 
 ## Layout
 

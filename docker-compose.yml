@@ -48,8 +48,12 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     image: local-ai-harness-frontend:local
+    # Bind to loopback only. Publishing on 0.0.0.0 would expose the UI (and the
+    # /api proxy that carries provider API keys) to every network interface on
+    # the host; 127.0.0.1 keeps it reachable only from the host itself, which is
+    # the intended local-development surface. Reach it at http://127.0.0.1:8080.
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     # No depends_on: nginx resolves `backend` per request (see
     # frontend/nginx.conf), so the UI stays available even when the backend is
     # down and recovers without a frontend restart. The backend healthcheck
