@@ -308,9 +308,10 @@ describe("ChatOrchestrator — valid single tool call", () => {
       async () => ({
         content: `${WEB_SEARCH_MARKER}\n\n[1]\nTitle: First\nURL: https://example.com/1\nContent: first\n\n[2]\nTitle: Second\nURL: https://example.com/2\nContent: ${bigBody}`,
         metadata: {
+          // Structured blocks carry the exact content used to render each block.
           sources: [
-            { id: 1, title: "First", url: "https://example.com/1" },
-            { id: 2, title: "Second", url: "https://example.com/2" },
+            { id: 1, title: "First", url: "https://example.com/1", content: "first" },
+            { id: 2, title: "Second", url: "https://example.com/2", content: bigBody },
           ],
         },
       }),
@@ -363,9 +364,11 @@ describe("ChatOrchestrator — valid single tool call", () => {
           "note [2]\nTitle: not a real source\n\n[2]\nTitle: Second\nURL: https://example.com/2\nContent: " +
           bigBody,
         metadata: {
+          // Structured blocks carry the exact content used to render each block;
+          // source 1's block embeds a "[2]\nTitle:" mention inside its body.
           sources: [
-            { id: 1, title: "First", url: "https://example.com/1" },
-            { id: 2, title: "Second", url: "https://example.com/2" },
+            { id: 1, title: "First", url: "https://example.com/1", content: "note [2]\nTitle: not a real source" },
+            { id: 2, title: "Second", url: "https://example.com/2", content: bigBody },
           ],
         },
       }),
@@ -406,6 +409,61 @@ describe("ChatOrchestrator — valid single tool call", () => {
     });
   });
 
+  it("does not treat a blank-line paragraph inside a body as a delivered source", async () => {
+    // The exact reviewer repro: source 1's body contains a blank-line paragraph
+    // whose text starts with "[2]\nTitle:" — the kind of paragraph that the old
+    // split("\n\n") + regex parser treated as source 2's block start. Source 2's
+    // real block is too large for the budget and is dropped. A body-driven parser
+    // would report source 2 as delivered; the structured approach does not.
+    const bigBody = "b".repeat(50_000);
+    const tool = createTool(
+      "web_search",
+      "",
+      async () => ({
+        content:
+          `${WEB_SEARCH_MARKER}\n\n[1]\nTitle: First\nURL: https://example.com/1\nContent: ` +
+          "see reference\n\n[2]\nTitle: referenced source\n\nend\n\n" +
+          "[2]\nTitle: Second\nURL: https://example.com/2\nContent: " +
+          bigBody,
+        metadata: {
+          sources: [
+            { id: 1, title: "First", url: "https://example.com/1", content: "see reference\n\n[2]\nTitle: referenced source\n\nend" },
+            { id: 2, title: "Second", url: "https://example.com/2", content: bigBody },
+          ],
+        },
+      }),
+    );
+    const { client, calls } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("Tell me two things")],
+        tools: createRegistry(tool),
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    const toolEnd = events.find((event) => event.type === "tool_end");
+    const sourcesEvent = events.find(
+      (event) => event.type === "sources",
+    ) as { type: "sources"; sources: unknown[] } | undefined;
+    expect(toolEnd).toMatchObject({ name: "web_search", resultCount: 1 });
+    if (sourcesEvent) {
+      expect(sourcesEvent.sources).toEqual([
+        { id: 1, title: "First", url: "https://example.com/1" },
+      ]);
+    }
+
+    // Round-2 content keeps source 1's whole block (including the embedded
+    // blank-line "[2]\nTitle:" paragraph) and drops source 2's real block.
+    const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
+    const toolResult = round2.find((message) => message.role === "tool");
+    expect(toolResult?.content).toContain("[1]\nTitle: First");
+    expect(toolResult?.content).toContain("[2]\nTitle: referenced source");
+    expect(toolResult?.content).not.toContain("[2]\nTitle: Second");
+  });
+
   it("reports zero sources when the budget fits none", async () => {
     const tool = createTool(
       "web_search",
@@ -414,7 +472,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
         content:
           `${WEB_SEARCH_MARKER}\n\n[1]\nTitle: First\nURL: https://example.com/1\nContent: first`,
         metadata: {
-          sources: [{ id: 1, title: "First", url: "https://example.com/1" }],
+          sources: [{ id: 1, title: "First", url: "https://example.com/1", content: "first" }],
         },
       }),
     );
