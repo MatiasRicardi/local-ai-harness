@@ -78,18 +78,22 @@ function sanitizeSseData(text: string): string {
  * Which sources actually entered the model's round-2 context.
  *
  * `toolResultContent` is the (possibly truncated) tool-result body sent to the
- * model. Each source is rendered as one `[id]`-prefixed block (see
- * webSearchFormat) and truncation keeps whole blocks (never cuts mid-block), so
- * a source was delivered to the model iff its block is present in
- * `toolResultContent`. A source emitted to the UI but dropped by truncation is
- * therefore excluded, keeping `sources`/`resultCount` consistent with what the
- * model actually received.
+ * model. It is a sequence of `\n\n`-separated blocks, each source rendered as
+ * one `[id]\nTitle:`-prefixed block (see webSearchFormat), and truncation keeps
+ * whole blocks (never cuts mid-block). The delivered set is therefore derived
+ * from the block *starts* only: a source was delivered to the model iff its
+ * block is present. Reading the id from a block boundary rather than searching
+ * the body means text that merely mentions `[2]\nTitle:` inside another source's
+ * content can never be mistaken for a delivered source, and a source dropped by
+ * truncation is excluded — keeping `sources`/`resultCount` consistent with what
+ * the model actually received.
  */
-function deliveredSourceIds(sources: SourceRef[], toolResultContent: string): Set<number> {
+function deliveredSourceIdsFromContent(toolResultContent: string): Set<number> {
   const delivered = new Set<number>();
-  for (const source of sources) {
-    if (toolResultContent.includes(`[${source.id}]\nTitle:`)) {
-      delivered.add(source.id);
+  for (const segment of toolResultContent.split("\n\n")) {
+    const match = /^\[(\d+)\]\nTitle:/.exec(segment);
+    if (match) {
+      delivered.add(Number(match[1]));
     }
   }
   return delivered;
@@ -237,12 +241,12 @@ export class ChatOrchestrator {
     // not be surfaced. `resultCount` matches the number of sources emitted,
     // including when that is zero.
     const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    const { messages: round2Messages, deliveredSourceIds } = await this.buildRound2Messages(
+    const { messages: round2Messages, delivered } = await this.buildRound2Messages(
       input,
       call,
       result,
     );
-    const deliveredSources = sanitizedSources.filter((source) => deliveredSourceIds.has(source.id));
+    const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
     yield { type: "tool_end", name: tool.definition.name, resultCount: deliveredSources.length };
     yield { type: "sources", sources: deliveredSources };
 
@@ -263,7 +267,7 @@ export class ChatOrchestrator {
     input: ChatOrchestrationInput,
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
-  ): Promise<{ messages: ProviderRequestMessage[]; deliveredSourceIds: Set<number> }> {
+  ): Promise<{ messages: ProviderRequestMessage[]; delivered: Set<number> }> {
     const webContent = result.content;
 
     // Fixed round-2 content: the original conversation plus the overhead of the
@@ -302,11 +306,10 @@ export class ChatOrchestrator {
 
     // Report only the sources whose blocks are actually present in the (possibly
     // truncated) content sent to the model, so the emitted `sources` event and
-    // `tool_end.resultCount` stay consistent with the delivered content.
-    const delivered = deliveredSourceIds(
-      sanitizeSources(result.metadata?.sources),
-      toolResultContent,
-    );
+    // `tool_end.resultCount` stay consistent with the delivered content. The set
+    // is derived from complete block boundaries, not from a substring search of
+    // the (untrusted) body.
+    const delivered = deliveredSourceIdsFromContent(toolResultContent);
 
     const assistantToolCallMessage: ProviderRequestMessage = {
       role: "assistant",
@@ -326,7 +329,7 @@ export class ChatOrchestrator {
 
     return {
       messages: [...input.messages, assistantToolCallMessage, toolResultMessage],
-      deliveredSourceIds: delivered,
+      delivered,
     };
   }
 

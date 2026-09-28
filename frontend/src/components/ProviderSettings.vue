@@ -31,7 +31,7 @@ const providerBaseUrlInsecure = computed(() => {
   }
   if (parsed.protocol !== "http:") return false
   const host = parsed.hostname.toLowerCase()
-  return host !== "localhost" && host !== "127.0.0.1" && host !== "::1"
+  return host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]"
 })
 
 function onWebSearchToggle(event: Event): void {

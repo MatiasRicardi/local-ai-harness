@@ -101,6 +101,13 @@ Binding to `127.0.0.1` keeps that surface reachable only from the host itself,
 which is the intended local-development exposure. Reach the app at
 `http://127.0.0.1:8080`.
 
+Host-only isolation via `127.0.0.1` requires **Docker Engine 28.0.0 or newer**.
+On older engines a port published to `127.0.0.1` can still be reached by hosts
+on the same local-area (L2) network, so the frontend and its `/api` proxy
+(forwards provider API keys) would leak beyond the host. On Engine < 28.0.0 add
+host firewall rules to block that access, or run this compose stack only on a
+trusted network.
+
 The backend port is intentionally not published at all: the frontend proxy
 reaches it as `backend:3000` on the Compose network, and host health checks go
 through `http://127.0.0.1:8080/api/health`.

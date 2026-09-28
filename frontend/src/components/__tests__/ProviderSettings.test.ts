@@ -64,4 +64,17 @@ describe("ProviderSettings", () => {
       "Unable to reach the local backend.",
     )
   })
+
+  it("does not warn for an HTTP loopback provider over bracketed IPv6 ([::1])", async () => {
+    wrapper = mount(ProviderSettings)
+    await wrapper.find("#base-url").setValue("http://[::1]:8080/v1")
+    // [::1] is loopback, so the remote-host cleartext warning must not show.
+    expect(wrapper.text()).not.toContain("HTTP to a remote host")
+  })
+
+  it("warns for an HTTP provider on a remote host", async () => {
+    wrapper = mount(ProviderSettings)
+    await wrapper.find("#base-url").setValue("http://provider.example.test/v1")
+    expect(wrapper.text()).toContain("HTTP to a remote host")
+  })
 })
