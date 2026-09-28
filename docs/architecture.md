@@ -201,14 +201,22 @@ interface Message {
 2. `chat.ts` calls `POST /api/chat/stream` and streams SSE events.
 3. If a document is attached, the backend inserts a document-context block and a
    document-content block ahead of the conversation (see [Context management](#context-management)).
-4. The backend forwards the messages to the model server and pipes the SSE
-   stream back to the browser. With web search enabled, a single tool call is
-   orchestrated and its lifecycle is exposed as structured SSE events between
-   `start` and the final answer: `tool_start` (name + safe query, emitted only
-   after the arguments validate and immediately before execution), `tool_end`
-   (`resultCount`), and `sources` (backend-sanitized `{ id, title, url }` with
-   safe `http(s)` URLs only — never `content`, never a key or base URL). A plain
-   model turn emits only the v1.0.0 `start`/`delta`/`done` events.
+4. When Web Search is **disabled** (no tools registered), the backend forwards
+   the messages to the model server and pipes the SSE stream straight back to
+   the browser — live, progressive streaming, unchanged from v1.0.0. When Web
+   search is **enabled**, the first model round is **accumulated** (buffered)
+   rather than streamed live: the model may emit filler text such as "I'll
+   search for that…" before deciding whether to call a tool, and that
+   preliminary text is discarded rather than shown (see
+   [Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)).
+   A single tool call is orchestrated and its lifecycle is exposed as structured
+   SSE events between `start` and the final answer: `tool_start` (name + safe
+   query, emitted only after the arguments validate and immediately before
+   execution), `tool_end` (`resultCount`), and `sources` (backend-sanitized
+   `{ id, title, url }` with safe `http(s)` URLs only — never `content`, never a
+   key or base URL). If the model calls the tool, the final answer (round 2) is
+   streamed progressively; if it does not, the buffered first-round text is
+   flushed at the end as a single `start`/`delta`/`done` sequence.
 5. On client cancel or disconnect, the backend stops upstream work silently.
 6. The frontend renders streamed tokens and maps error events to user messages.
 
@@ -225,12 +233,38 @@ supports. Requirements:
 - support for the OpenAI-style fields used here (`type: "function"`,
   `function.name`, `function.arguments`, `tool_call_id`).
 
-Tool calling is **not** guaranteed for all local models. When the model cannot
-call tools, the endpoint degrades gracefully to the plain v1.0.0 streaming path
-(`start`/`delta`/`done`) — no search happens. A model that requests an unknown
-tool, malformed arguments, or more than one call receives a stable error and is
-told to retry without tools. See the roadmap for the single-tool / single-round
-MVP limits.
+Tool calling is **not** guaranteed for all local models. When Web Search is
+**disabled**, no tools are registered and the turn streams live and progressive
+exactly like v1.0.0. When Web Search is **enabled** but the model does not call
+a tool, the turn still completes — but the first round was accumulated (see
+[Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)),
+so the buffered text is flushed at the end rather than shown progressively; this
+is not the same immediate streaming as the no-tools path. A model that requests
+an unknown tool, malformed arguments, or more than one call receives a stable
+error and is told to retry without tools. See the roadmap for the single-tool /
+single-round MVP limits.
+
+### Documented decision: first-round buffering with Web Search
+
+When Web Search is enabled, the backend accumulates the entire first model round
+before emitting anything visible. This is a deliberate v1.1.0 design decision:
+the model frequently emits short filler text ("I'll search for that…") before
+deciding to call the `web_search` tool, and showing that preliminary text — only
+to discard it when the tool is called — would be worse than buffering it.
+
+Consequences for what the user sees:
+
+- **Web Search enabled, model calls the tool** — the final answer (round 2) is
+  streamed progressively, token by token, after the single tool execution.
+- **Web Search enabled, model does not call the tool** — the buffered first-round
+  text is flushed at the end as a single `start`/`delta`/`done` sequence; it is
+  not shown progressively.
+- **Web Search disabled** — no tools are registered, so the turn streams live and
+  progressive immediately, unchanged from v1.0.0.
+
+The buffering is intentional, not a regression: it avoids leaking preliminary,
+soon-discarded text. Reworking the orchestration to stream the first round live
+while still suppressing filler is a planned follow-up, not a v1.1.0 change.
 
 ## Configuration
 
