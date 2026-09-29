@@ -1,18 +1,35 @@
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from "vue"
-import { testProviderConnection, type ProviderTestRequest } from "../services/provider"
-import { getProviderSettings, updateProviderSettings } from "../composables/useProviderSettings"
-import { useWebSearchSettings } from "../composables/useWebSearchSettings"
+import AppIcon from "./AppIcon.vue"
+import ConnectionSettings from "./ConnectionSettings.vue"
+import RuntimeSettings from "./RuntimeSettings.vue"
+import WebSearchSettings from "./WebSearchSettings.vue"
+import ConnectionTestFooter from "./ConnectionTestFooter.vue"
+import {
+  clampContextSize,
+  getProviderSettings,
+  updateProviderSettings,
+} from "../composables/useProviderSettings"
+import { runConnectionTest, clearConnectionTestStatus, useConnectionTest } from "../composables/useConnectionTest"
 
 const settings = getProviderSettings()
-const webSearch = useWebSearchSettings()
 
-// Reactive inline error for the Tavily key: shown next to the field when web
-// search is enabled but no key is configured. App.vue also blocks the send
-// path as a backstop.
-const webSearchMissingKey = computed(
-  () => webSearch.settings.value.enabled && !webSearch.settings.value.apiKey.trim(),
-)
+// Draft being edited. Persisting it is debounced below; the test action reads
+// it directly so it always targets what is currently in the form.
+const state = ref({
+  name: settings.value.name,
+  baseUrl: settings.value.baseUrl,
+  model: settings.value.model,
+  contextSizeTokens: settings.value.contextSizeTokens,
+  apiKey: settings.value.apiKey,
+  timeout: settings.value.timeout,
+})
+
+// Result of the explicit Test Connection action, shared with the app header.
+const { status, message, testing, targetUrl } = useConnectionTest()
+
+// Reactive inline error for the Tavily key lives in the Web Search card; App
+// also blocks the send path as a backstop.
 
 // True when the configured provider base URL is a cleartext (http://) target on
 // a non-local host: the stored apiKey (and any conversation contents forwarded
@@ -34,60 +51,16 @@ const providerBaseUrlInsecure = computed(() => {
   return host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]"
 })
 
-function onWebSearchToggle(event: Event): void {
-  webSearch.updateWebSearchSettings({ enabled: (event.target as HTMLInputElement).checked })
-}
-
-function onWebSearchApiKeyInput(event: Event): void {
-  webSearch.updateWebSearchSettings({ apiKey: (event.target as HTMLInputElement).value })
-}
-
-function onSearchDepthChange(event: Event): void {
-  webSearch.updateWebSearchSettings({
-    searchDepth: (event.target as HTMLSelectElement).value as "basic" | "advanced",
-  })
-}
-
-function onMaxResultsInput(event: Event): void {
-  webSearch.updateWebSearchSettings({ maxResults: Number((event.target as HTMLInputElement).value) })
-}
-
-const state = ref({
-  name: settings.value.name,
-  baseUrl: settings.value.baseUrl,
-  model: settings.value.model,
-  contextSizeTokens: settings.value.contextSizeTokens,
-  apiKey: settings.value.apiKey,
-  timeout: settings.value.timeout,
-  status: "" as
-    | ""
-    | "testing"
-    | "success"
-    | "error",
-  message: "",
-  testing: false,
-})
-
-// Live preview of the value being typed, shown in the field's label row.
-const contextBadge = computed(() => {
-  const tokens = Number(state.value.contextSizeTokens)
-  return Number.isFinite(tokens) && tokens > 0 ? tokens.toLocaleString() : ""
-})
-
 const timer = ref<number | undefined>(undefined)
-
-const MIN_CONTEXT_SIZE = 1024
-const MAX_CONTEXT_SIZE = 2000000
 
 const doSync = () => {
   if (timer.value) return
   timer.value = setTimeout(() => {
-    const validatedContextSize = Math.max(MIN_CONTEXT_SIZE, Math.min(MAX_CONTEXT_SIZE, state.value.contextSizeTokens))
     updateProviderSettings({
       name: state.value.name,
       baseUrl: state.value.baseUrl,
       model: state.value.model,
-      contextSizeTokens: validatedContextSize,
+      contextSizeTokens: clampContextSize(state.value.contextSizeTokens),
       apiKey: state.value.apiKey,
       timeout: state.value.timeout,
     })
@@ -112,324 +85,75 @@ watch(
     state.value.timeout,
   ],
   doSync,
-  { immediate: false }
+  { immediate: false },
 )
 
-const handleTest = async () => {
-  if (!state.value.baseUrl || !state.value.model) return
+// A test result is bound to the endpoint and model it was run against. Clear
+// it the moment either changes, so the header and card badge never keep
+// showing "Connected" for a configuration that was never tested.
+watch(
+  () => [state.value.baseUrl, state.value.model],
+  () => {
+    clearConnectionTestStatus()
+  },
+)
 
-  state.value.status = "testing"
-  state.value.message = ""
-  state.value.testing = true
+// A test needs an endpoint and a model; while one is running it cannot be
+// re-issued.
+const testDisabled = computed(
+  () => !state.value.baseUrl || !state.value.model || testing.value,
+)
 
-  try {
-    const payload: ProviderTestRequest = {
-      baseUrl: state.value.baseUrl,
-      model: state.value.model,
-      apiKey: state.value.apiKey || undefined,
-      timeout: state.value.timeout * 1000,
-    }
-
-    const response = await testProviderConnection(payload)
-
-    if (response.success) {
-      state.value.status = "success"
-      state.value.message = `Connected to ${response.model}`
-    } else {
-      state.value.status = "error"
-      state.value.message = response.error || "Connection failed"
-    }
-  } catch (err) {
-    state.value.status = "error"
-    state.value.message = err instanceof Error ? err.message : "Connection failed"
-  } finally {
-    state.value.testing = false
-  }
+function handleTest(): void {
+  if (testDisabled.value) return
+  void runConnectionTest({
+    baseUrl: state.value.baseUrl,
+    model: state.value.model,
+    apiKey: state.value.apiKey,
+    timeout: state.value.timeout,
+  })
 }
 </script>
 
 <template>
-  <div class="provider-settings flex h-full flex-col">
-    <div class="settings-header border-b border-stone-200/70 px-4 py-4">
-      <div class="flex items-center gap-2">
-        <svg
-          class="size-3.5 shrink-0 text-sky-600"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.6"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <path d="M2.5 6.5h7M15.5 6.5h2M2.5 13.5h1.5M9.5 13.5h8" />
-          <circle cx="12.6" cy="6.5" r="1.6" />
-          <circle cx="6.6" cy="13.5" r="1.6" />
-        </svg>
-        <h2 class="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-stone-900">Model Settings</h2>
-      </div>
-      <p class="storage-notice m-0 mt-1 text-[0.6875rem] leading-relaxed text-stone-500">
+  <div class="provider-settings flex h-full min-h-0 flex-col">
+    <div class="settings-header shrink-0 border-b border-slate-200 bg-white px-3.5 py-3">
+      <h2
+        class="m-0 flex items-center gap-1.5 text-xs font-semibold tracking-tight text-slate-900"
+      >
+        <AppIcon name="sliders" class="size-3.5 text-indigo-600" />
+        <span>Model Settings</span>
+      </h2>
+      <p class="storage-notice m-0 mt-1 text-[0.6875rem] leading-relaxed text-slate-500">
         Settings are stored locally in your browser.
       </p>
     </div>
 
-    <form @submit.prevent="handleTest" class="settings-form flex flex-1 flex-col gap-4 p-4">
-      <div class="form-group flex flex-col gap-1.5">
-        <label for="provider-name" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Provider Name</label>
-        <input
-          id="provider-name"
-          v-model="state.name"
-          type="text"
-          placeholder="e.g. llama.cpp"
-          class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
+    <form class="settings-form flex min-h-0 flex-1 flex-col" @submit.prevent="handleTest">
+      <div class="settings-groups min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        <ConnectionSettings
+          v-model:provider-name="state.name"
+          v-model:base-url="state.baseUrl"
+          v-model:model="state.model"
+          :insecure-base-url="providerBaseUrlInsecure"
+          :connection-status="status"
         />
-      </div>
 
-      <div class="form-group flex flex-col gap-1.5">
-        <label for="base-url" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Base URL</label>
-        <input
-          id="base-url"
-          v-model="state.baseUrl"
-          type="url"
-          placeholder="http://localhost:8080/v1"
-          class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
+        <RuntimeSettings
+          v-model:context-size-tokens="state.contextSizeTokens"
+          v-model:timeout="state.timeout"
+          v-model:api-key="state.apiKey"
         />
-        <p
-          v-if="providerBaseUrlInsecure"
-          class="flex items-start gap-1.5 text-[0.6875rem] text-amber-700"
-        >
-          <svg
-            class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 fill-amber-500"
-            viewBox="0 0 20 20"
-            aria-hidden="true"
-          >
-            <path
-              d="M10 2a7 7 0 100 14 7 7 0 000-14zM9 5a1 1 0 112 0v4a1 1 0 11-2 0V5zm1 11a1.25 1.25 0 110 2.5A1.25 1.25 0 019 16z"
-            />
-          </svg>
-          <span>
-            The provider URL is HTTP to a remote host; the API key and messages
-            are sent unencrypted. Use HTTPS, or point this at a local server.
-          </span>
-        </p>
+
+        <WebSearchSettings />
       </div>
 
-      <div class="form-group flex flex-col gap-1.5">
-        <label for="model" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Model</label>
-        <input
-          id="model"
-          v-model="state.model"
-          type="text"
-          placeholder="local-model"
-          class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
-        />
-      </div>
-
-      <div class="form-group flex flex-col gap-1.5">
-        <div class="flex items-baseline justify-between gap-2">
-          <label for="context-size" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Context size</label>
-          <span
-            v-if="contextBadge"
-            class="context-size-value rounded border border-sky-100 bg-sky-50 px-1.5 py-0.5 font-mono text-[0.6875rem] font-semibold text-sky-600"
-          >{{ contextBadge }}</span>
-        </div>
-        <input
-          id="context-size"
-          v-model.number="state.contextSizeTokens"
-          type="number"
-          min="1024"
-          max="2000000"
-          step="1024"
-          class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:text-stone-400"
-        />
-        <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">Approximate maximum context window supported by the configured model.</small>
-      </div>
-
-      <div class="form-group flex flex-col gap-1.5">
-        <label for="api-key" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">
-          API Key <span class="font-normal normal-case tracking-normal text-stone-400">(optional)</span>
-        </label>
-        <div class="relative">
-          <input
-            id="api-key"
-            v-model="state.apiKey"
-            type="password"
-            placeholder="Leave blank if not required"
-            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
-          />
-          <svg
-            class="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-stone-400"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <rect x="4" y="8.5" width="12" height="8.5" rx="1.5" />
-            <path d="M7 8.5V6.8a3 3 0 0 1 6 0v1.7" />
-          </svg>
-        </div>
-        <small class="warning text-[0.6875rem] font-normal leading-relaxed text-amber-700">Your API key is stored in localStorage on this browser.</small>
-      </div>
-
-      <div class="form-group flex flex-col gap-1.5">
-        <label for="timeout" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Timeout (seconds)</label>
-        <input
-          id="timeout"
-          v-model.number="state.timeout"
-          type="number"
-          min="10"
-          max="300"
-          step="10"
-          class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:text-stone-400"
-        />
-      </div>
-
-      <!-- Web search configuration. Kept separate from the LLM provider
-           settings above: this apiKey is the Tavily key, never the local
-           model key. No Base URL field — it stays backend-only. -->
-      <div
-        class="form-group flex flex-col gap-2 rounded-xl border border-stone-200/70 bg-stone-50/40 p-3 pt-4"
-        role="group" aria-labelledby="web-search-heading"
-      >
-        <h3 id="web-search-heading" class="m-0 text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Web search</h3>
-
-        <label class="inline-flex cursor-pointer items-center gap-2">
-          <input
-            type="checkbox"
-            :checked="webSearch.settings.value.enabled"
-            @change="onWebSearchToggle($event)"
-            aria-label="Enable web search"
-            class="size-3.5 rounded border-stone-300 text-sky-600 focus:border-sky-500 focus:ring-sky-500/30"
-          />
-          <span class="text-xs text-stone-700">Enable web search</span>
-        </label>
-
-        <div class="flex items-center justify-between gap-3 rounded-lg border border-stone-200 bg-white px-3 py-2 shadow-sm">
-          <span class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Provider</span>
-          <span class="font-mono text-xs text-stone-700">Tavily</span>
-        </div>
-
-        <div class="flex flex-col gap-1.5">
-          <label for="web-search-api-key" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">
-            Tavily API Key
-            <span v-if="webSearch.settings.value.enabled" class="font-normal normal-case tracking-normal text-amber-700">(required when enabled)</span>
-          </label>
-          <input
-            id="web-search-api-key"
-            :value="webSearch.settings.value.apiKey"
-            type="password"
-            @input="onWebSearchApiKeyInput($event)"
-            placeholder="tly-..."
-            autocomplete="off"
-            spellcheck="false"
-            aria-autocomplete="none"
-            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:font-sans placeholder:text-stone-400"
-          />
-          <small v-if="webSearchMissingKey" class="warning text-[0.6875rem] font-normal leading-relaxed text-amber-700">Enter your Tavily API key to enable web search.</small>
-          <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">The Tavily key is sent to your Local AI Harness backend only when Web Search is enabled.</small>
-        </div>
-
-        <div class="flex flex-col gap-1.5">
-          <label for="search-depth" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Search depth</label>
-          <select
-            id="search-depth"
-            :value="webSearch.settings.value.searchDepth"
-            @change="onSearchDepthChange($event)"
-            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs text-stone-900 shadow-sm"
-          >
-            <option value="basic">Basic</option>
-            <option value="advanced">Advanced</option>
-          </select>
-          <small class="helper text-[0.6875rem] font-normal leading-relaxed text-stone-500">Basic search uses fewer Tavily credits than Advanced.</small>
-        </div>
-
-        <div class="flex flex-col gap-1.5">
-          <label for="max-results" class="text-[0.6875rem] font-semibold uppercase tracking-wider text-stone-500">Max results</label>
-          <input
-            id="max-results"
-            :value="webSearch.settings.value.maxResults"
-            @input="onMaxResultsInput($event)"
-            type="number"
-            min="1"
-            max="10"
-            step="1"
-            class="focus-ring w-full rounded-lg border border-stone-200 bg-white px-3 py-2 font-mono text-xs text-stone-900 shadow-sm placeholder:text-stone-400"
-          />
-        </div>
-      </div>
-
-      <div class="form-actions flex flex-col gap-2 pt-1">
-        <button
-          type="submit"
-          class="btn btn-primary focus-ring inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm shadow-sky-500/20 transition-all duration-150 hover:bg-sky-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400 disabled:shadow-none"
-          :disabled="!state.baseUrl || !state.model || state.testing"
-        >
-          <svg
-            class="size-3.5 shrink-0"
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            aria-hidden="true"
-          >
-            <path d="M13 1.8 3.8 11.4h4.6l-1.4 6.8L14.8 8.6h-4.4L13 1.8z" />
-          </svg>
-          <span>{{ state.testing ? "Testing..." : "Test Connection" }}</span>
-        </button>
-      </div>
-
-      <div
-        v-if="state.testing"
-        class="status testing mt-1 flex items-start gap-2 rounded-xl border border-amber-200/80 bg-amber-50/80 px-3 py-2.5 text-xs text-amber-800"
-      >
-        <span class="mt-1 size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500" aria-hidden="true"></span>
-        <span>Testing connection to <span class="font-mono text-[0.6875rem]">{{ state.baseUrl }}</span>...</span>
-      </div>
-
-      <div
-        v-else-if="state.status === 'success'"
-        class="status success mt-1 flex items-start gap-2 rounded-xl border border-emerald-200/80 bg-emerald-50/80 px-3 py-2.5 text-xs text-emerald-800"
-      >
-        <svg
-          class="mt-0.5 size-3.5 shrink-0 text-emerald-600"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.75"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="10" cy="10" r="7.5" />
-          <path d="m6.2 10.2 2.6 2.6 5-5.4" />
-        </svg>
-        <span class="min-w-0">
-          <strong class="font-semibold">Connected!</strong>
-          <span class="mt-0.5 block break-all font-mono text-[0.6875rem] text-emerald-700">{{ state.message }}</span>
-        </span>
-      </div>
-
-      <div
-        v-else-if="state.status === 'error'"
-        class="status error mt-1 flex items-start gap-2 rounded-xl border border-red-200/80 bg-red-50/80 px-3 py-2.5 text-xs text-red-800"
-      >
-        <svg
-          class="mt-0.5 size-3.5 shrink-0 text-red-600"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.75"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <circle cx="10" cy="10" r="7.5" />
-          <path d="M10 6v5" />
-          <path d="M10 13.8h.01" />
-        </svg>
-        <span class="min-w-0">
-          <strong class="font-semibold">Connection failed</strong>
-          <span class="mt-0.5 block break-words text-[0.6875rem] text-red-700">{{ state.message }}</span>
-        </span>
-      </div>
+      <ConnectionTestFooter
+        :disabled="testDisabled"
+        :status="status"
+        :message="message"
+        :base-url="targetUrl"
+      />
     </form>
   </div>
 </template>

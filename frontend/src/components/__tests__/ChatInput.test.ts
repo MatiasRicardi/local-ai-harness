@@ -62,4 +62,5 @@ describe("ChatInput", () => {
     await wrapper.setProps({ resetKey: 2 })
     expect(textarea(wrapper).value).toBe("")
   })
+
 })

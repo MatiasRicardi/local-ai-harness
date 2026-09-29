@@ -28,13 +28,14 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 
 2. Open <http://localhost:5173>.
 
-3. Open **Provider Settings** and set:
+3. In the **Model Settings** sidebar (left column; stacked above the chat on
+   narrow screens) set:
    - **Base URL**: the model server URL from the prerequisites.
    - **Model**: the model name.
    - **API key**: leave blank for local servers that don't require one.
    - **Timeout**: leave the default.
 
-4. Click **Test connection**.
+4. Click **Test Connection**, pinned at the bottom of the sidebar.
    - ✅ Expect a success message with a short greeting from the model.
    - ❌ If it fails, re-check the base URL and model name, and confirm the
      model server is running.
@@ -47,7 +48,7 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
    about it.
    - ✅ Expect the answer to reference the document content.
 
-7. (Optional) Click **Reset conversation** and confirm the chat clears.
+7. (Optional) Click **New Chat** in the header and confirm the chat clears.
 
 ---
 
@@ -69,7 +70,7 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
    [`docs/docker.md`](docker.md#the-model-server-must-be-reachable-from-docker)
    first.
    
-   Then, in **Provider Settings**, set the base URL to:
+   Then, in **Model Settings**, set the base URL to:
    - `http://host.docker.internal:<provider-port>`
 
    For example, Ollama on port 11434 → `http://host.docker.internal:11434`.
@@ -92,7 +93,7 @@ local models do **not**.
 1. Ensure the backend has `AI_TAVILY_BASE_URL` configured or defaulted
    (`https://api.tavily.com`). No code change is needed to override it (see
    step 11).
-2. Configure a tool-capable local model in **Provider Settings**, then send a
+2. Configure a tool-capable local model in **Model Settings**, then send a
    message to confirm tool calling works.
 3. Open **Web Search settings** (separate from provider settings) and enter your
    Tavily API key. The key is stored only in your browser and sent to the backend
@@ -122,15 +123,45 @@ To reach the backend directly on the host, add a
 
 ---
 
+## Flow D — Interface checks
+
+Presentation-only; no model server response is required for most of them.
+
+1. **Header** shows the app name, the package version, and — only when they are
+   actually configured — the provider name + endpoint host and the model +
+   context window. Nothing in the header is invented, and the status dot stays
+   neutral until a connection test has been run (it is not a health poll).
+2. **Model Settings** cards (Connection Endpoint / Context & Runtime /
+   Web Search) scroll independently, and the **Test Connection** footer stays
+   pinned and visible while scrolling.
+3. The header dot turns amber while testing, then green/red with the result
+   panel in the footer.
+4. Clear the **Base URL** field: **Test Connection** becomes disabled.
+5. Use the context slider: the numeric **Context size** field and the two
+   badges (card header, header model pill) update together, and the slider
+   highlights the nearest power-of-two step.
+6. On an empty chat, the canvas shows the welcome state and the composer starts
+   empty; type a message and send it as usual.
+7. The composer floats above the canvas; **Enter** sends, **Shift + Enter** adds
+   a newline, and **Attach document** / the attached-file chip work as before.
+8. Resize to a narrow viewport (or zoom): the sidebar stacks above the chat,
+   the header collapses the endpoint/model pills, and no horizontal scrollbar
+   appears.
+9. A new remote `http://` base URL still shows the cleartext warning, and a
+   loopback (`localhost` / `127.0.0.1` / `[::1]`) URL does not.
+
+---
+
 ## Expected results summary
 
 | Step                         | Expected                          |
 |------------------------------|-----------------------------------|
 | Test connection              | Success greeting from the model   |
+| Interface checks (Flow D)     | Cards scroll, footer pinned, no invented status |
 | Send a message               | Streamed markdown response        |
 | Stop / cancel                | Generation halts                  |
 | Attach document + ask        | Answer references the document    |
-| Reset conversation           | Chat clears                       |
+| New Chat                     | Chat clears                       |
 
 | Web search turn (Flow C)     | Search activity + cited sources   |
 | Disable web search           | Ordinary chat resumes             |

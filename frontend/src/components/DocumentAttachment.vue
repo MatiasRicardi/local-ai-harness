@@ -116,10 +116,10 @@ const emit = defineEmits<{
     <div class="document-attachment-info flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
       <span
         v-if="attachedDocument"
-        class="document-attachment-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md border border-stone-200/70 bg-stone-50 px-2 py-1 text-[0.6875rem]"
+        class="document-attachment-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-md border border-slate-200/70 bg-slate-50 px-2 py-1 text-[0.6875rem]"
       >
         <svg
-          class="size-3 shrink-0 text-sky-600"
+          class="size-3 shrink-0 text-indigo-600"
           viewBox="0 0 20 20"
           fill="none"
           stroke="currentColor"
@@ -130,9 +130,9 @@ const emit = defineEmits<{
           <path d="M6 2.5h6l3 3v12H6z" />
           <path d="M12 2.5V6h3" />
         </svg>
-        <span class="document-attachment-filename max-w-[14rem] truncate font-medium text-stone-700">{{ attachedDocument.originalFilename }}</span>
+        <span class="document-attachment-filename max-w-[14rem] truncate font-medium text-slate-700">{{ attachedDocument.originalFilename }}</span>
         <span class="document-attachment-status font-medium text-emerald-600">Ready</span>
-        <span class="document-attachment-details text-stone-400">
+        <span class="document-attachment-details text-slate-400">
           {{ attachedDocument.characterCount.toLocaleString() }} characters
           <template v-if="attachedDocument.pageCount !== undefined">
             · {{ attachedDocument.pageCount }} page{{ attachedDocument.pageCount === 1 ? "" : "s" }}
@@ -142,9 +142,9 @@ const emit = defineEmits<{
 
       <div
         v-if="uploading"
-        class="document-attachment-uploading flex items-center gap-1.5 rounded-md border border-stone-200/70 bg-stone-50 px-2 py-1 text-[0.6875rem] text-stone-500"
+        class="document-attachment-uploading flex items-center gap-1.5 rounded-md border border-slate-200/70 bg-slate-50 px-2 py-1 text-[0.6875rem] text-slate-500"
       >
-        <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-500" aria-hidden="true"></span>
+        <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-indigo-500" aria-hidden="true"></span>
         Uploading document...
       </div>
 
@@ -164,7 +164,7 @@ const emit = defineEmits<{
       <div class="document-attachment-actions flex flex-wrap items-center gap-1">
         <button
           type="button"
-          class="document-attachment-btn focus-ring-inset inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-stone-600 transition-colors duration-150 hover:bg-stone-100 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+          class="document-attachment-btn focus-ring-inset inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-slate-600 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleButtonClick"
           :aria-label="attachedDocument ? 'Replace document' : 'Attach document'"
@@ -186,7 +186,7 @@ const emit = defineEmits<{
         <button
           v-if="attachedDocument"
           type="button"
-          class="document-attachment-remove focus-ring-inset inline-flex shrink-0 items-center rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-stone-500 transition-colors duration-150 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          class="document-attachment-remove focus-ring-inset inline-flex shrink-0 items-center rounded-lg px-2 py-1 text-[0.6875rem] font-medium text-slate-500 transition-colors duration-150 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="uploading"
           @click="handleRemove"
           aria-label="Remove attached document"

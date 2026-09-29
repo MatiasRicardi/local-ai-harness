@@ -17,7 +17,6 @@ interface Props {
 
 const props = defineProps<Props>()
 
-const hasMessages = computed(() => props.messages.length > 0)
 // Neutral label: Message data does not store which model generated each
 // response, so deriving it from the live model name would relabel historical
 // answers whenever the provider model changes. Use a stable "Assistant" label.
@@ -75,13 +74,8 @@ function sourceDomain(url: string): string {
       </div>
     </div>
 
-    <div
-      v-if="!hasMessages"
-      class="empty-state rounded-2xl border border-dashed border-stone-200 bg-white/70 px-4 py-16 text-center"
-    >
-      <h3 class="m-0 mb-1 text-sm font-semibold text-stone-900">Start a conversation</h3>
-      <p class="m-0 text-sm text-stone-500">Send a message to your configured local model to get started.</p>
-    </div>
+    <!-- The no-messages state is rendered by ChatEmptyState in App.vue, which
+         can name the configured model; this component stays the transcript. -->
 
     <article
       v-for="msg in messages"
@@ -96,8 +90,8 @@ function sourceDomain(url: string): string {
         class="message-avatar flex h-8 w-8 shrink-0 items-center justify-center rounded-full"
         :class="
           msg.role === 'user'
-            ? 'bg-stone-200 text-stone-600 shadow-inner'
-            : 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-sm shadow-sky-500/20 ring-2 ring-white'
+            ? 'bg-slate-200 text-slate-600 shadow-inner'
+            : 'bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white shadow-sm shadow-indigo-500/20 ring-2 ring-white'
         "
       >
         <svg
@@ -122,36 +116,36 @@ function sourceDomain(url: string): string {
       </div>
       <div class="message-content min-w-0 flex-1">
         <div class="message-role mb-1 flex flex-wrap items-center gap-2">
-          <span class="text-xs font-semibold text-stone-900">
+          <span class="text-xs font-semibold text-slate-900">
             {{ msg.role === 'user' ? "You" : assistantLabel }}
           </span>
         </div>
         <!-- eslint-disable vue/no-v-html --><!-- content is sanitized via DOMPurify in renderMarkdown() -->
         <div
           v-if="msg.role === 'assistant'"
-          class="message-text markdown-content break-words rounded-2xl rounded-tl-sm border border-stone-200 bg-white p-4 text-sm leading-relaxed text-stone-800 shadow-sm"
+          class="message-text markdown-content break-words rounded-2xl rounded-tl-sm border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-800 shadow-sm"
           v-html="renderAssistantContent(msg.content)"
         ></div>
         <!-- eslint-enable vue/no-v-html -->
         <!-- Kept on one line: the bubble preserves newlines, so it must not pick up template whitespace. -->
-        <div v-else class="message-text inline-block max-w-2xl break-words whitespace-pre-wrap rounded-2xl rounded-tl-sm border border-stone-200/60 bg-stone-100/90 p-4 text-sm leading-relaxed text-stone-800">{{ msg.content }}</div>
+        <div v-else class="message-text inline-block max-w-2xl break-words whitespace-pre-wrap rounded-2xl rounded-tl-sm border border-slate-200/60 bg-slate-100/90 p-4 text-sm leading-relaxed text-slate-800">{{ msg.content }}</div>
         <!-- Backend-provided, structurally-validated sources for this turn. Rendered
              as plain text + safe links; never from model-generated Markdown. -->
         <div
           v-if="msg.role === 'assistant' && visibleSources(msg.sources)"
-          class="sources mt-3 border-t border-stone-200/70 pt-2.5"
+          class="sources mt-3 border-t border-slate-200/70 pt-2.5"
         >
-          <p class="m-0 mb-1.5 text-xs font-semibold text-stone-700">Sources</p>
+          <p class="m-0 mb-1.5 text-xs font-semibold text-slate-700">Sources</p>
           <ol class="m-0 list-decimal items-start space-y-1 pl-5">
-            <li v-for="source in visibleSources(msg.sources)" :key="source.id" class="flex gap-1 text-[0.8125rem] text-stone-700">
+            <li v-for="source in visibleSources(msg.sources)" :key="source.id" class="flex gap-1 text-[0.8125rem] text-slate-700">
               <a
                 :href="source.url"
                 target="_blank"
                 rel="noopener noreferrer"
-                class="break-words text-sky-700 underline hover:text-sky-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky-500 focus-visible:ring-offset-1"
+                class="break-words text-indigo-700 underline hover:text-indigo-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
               >
                 <span>{{ source.title }}</span>
-                <span class="text-stone-400"> — {{ sourceDomain(source.url) }}</span>
+                <span class="text-slate-400"> — {{ sourceDomain(source.url) }}</span>
               </a>
             </li>
           </ol>
@@ -169,12 +163,12 @@ function sourceDomain(url: string): string {
       v-if="loading"
       aria-live="polite"
       aria-atomic="true"
-      class="loading flex items-center gap-2.5 text-xs italic text-stone-400"
+      class="loading flex items-center gap-2.5 text-xs italic text-slate-400"
     >
       <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
-        <span class="size-1.5 animate-pulse rounded-full bg-sky-400"></span>
-        <span class="size-1.5 animate-pulse rounded-full bg-sky-500"></span>
-        <span class="size-1.5 animate-pulse rounded-full bg-sky-600"></span>
+        <span class="size-1.5 animate-pulse rounded-full bg-indigo-400"></span>
+        <span class="size-1.5 animate-pulse rounded-full bg-indigo-500"></span>
+        <span class="size-1.5 animate-pulse rounded-full bg-indigo-600"></span>
       </span>
       <span>{{ activityLabel }}</span>
     </div>

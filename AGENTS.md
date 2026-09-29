@@ -29,9 +29,9 @@ backend/    Node 22 + Fastify 5 + TS (HTTP API)
   src/files/      cleanup.ts — upload-dir containment, temp deletion
   src/utils/      errorHandler.ts (AppError), documentContext.ts
 frontend/   Vue 3.5 + Vite 8 + TS + Tailwind CSS v4
-  src/components/  ProviderSettings, ChatMessages, ChatInput, DocumentAttachment
+  src/components/  AppHeader, ProviderSettings + settings cards, ChatMessages, ChatInput, ChatEmptyState, DocumentAttachment, AppIcon
   src/services/    apiBase, provider, chat, files (fetch + SSE client)
-  src/composables/ useProviderSettings (localStorage)
+  src/composables/ useProviderSettings, useWebSearchSettings, useConnectionTest (localStorage / shared test result)
   src/utils/       markdown.ts (render+sanitize), parseApiError.ts
 docs/       architecture.md, security.md, docker.md, smoke-test.md
 docker-compose.yml   backend + frontend; the model server stays on the host

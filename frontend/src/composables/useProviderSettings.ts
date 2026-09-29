@@ -11,6 +11,15 @@ interface ProviderSettings {
   timeout: number
 }
 
+// Context-window bounds accepted by the backend (`context.maxTokens`). Kept
+// here so both the settings form and the context slider share one source.
+export const MIN_CONTEXT_SIZE = 1024
+export const MAX_CONTEXT_SIZE = 2000000
+
+export function clampContextSize(tokens: number): number {
+  return Math.max(MIN_CONTEXT_SIZE, Math.min(MAX_CONTEXT_SIZE, tokens))
+}
+
 const defaults: ProviderSettings = {
   name: "llama.cpp",
   baseUrl: "http://localhost:8080/v1",
