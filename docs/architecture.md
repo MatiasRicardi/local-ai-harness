@@ -182,8 +182,7 @@ no OCR).
 `App.vue` lays the app out as header / settings sidebar (`w-[340px]` on
  desktop, stacked on narrow screens) / scrolling chat canvas / composer dock, and
  renders `ChatEmptyState` instead of the transcript only while the transcript is
- empty and there is no error or stopped-turn banner. Its suggestions merely
- prefill the composer through the `ChatInput` `insertText()` handle.
+ empty and there is no error or stopped-turn banner.
  The palette is Tailwind v4 theme tokens (slate surfaces, indigo accent) plus a
  few `@utility` classes in `styles/tailwind.css` (`settings-card`, `field-input`,
  `chat-dots`, `shadow-subtle` / `shadow-floating`).

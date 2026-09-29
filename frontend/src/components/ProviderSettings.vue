@@ -10,7 +10,7 @@ import {
   getProviderSettings,
   updateProviderSettings,
 } from "../composables/useProviderSettings"
-import { runConnectionTest, useConnectionTest } from "../composables/useConnectionTest"
+import { runConnectionTest, clearConnectionTestStatus, useConnectionTest } from "../composables/useConnectionTest"
 
 const settings = getProviderSettings()
 
@@ -26,7 +26,7 @@ const state = ref({
 })
 
 // Result of the explicit Test Connection action, shared with the app header.
-const { status, message, testing } = useConnectionTest()
+const { status, message, testing, targetUrl } = useConnectionTest()
 
 // Reactive inline error for the Tavily key lives in the Web Search card; App
 // also blocks the send path as a backstop.
@@ -88,6 +88,16 @@ watch(
   { immediate: false },
 )
 
+// A test result is bound to the endpoint and model it was run against. Clear
+// it the moment either changes, so the header and card badge never keep
+// showing "Connected" for a configuration that was never tested.
+watch(
+  () => [state.value.baseUrl, state.value.model],
+  () => {
+    clearConnectionTestStatus()
+  },
+)
+
 // A test needs an endpoint and a model; while one is running it cannot be
 // re-issued.
 const testDisabled = computed(
@@ -142,7 +152,7 @@ function handleTest(): void {
         :disabled="testDisabled"
         :status="status"
         :message="message"
-        :base-url="state.baseUrl"
+        :base-url="targetUrl"
       />
     </form>
   </div>

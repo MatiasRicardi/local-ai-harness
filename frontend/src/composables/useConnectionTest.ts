@@ -25,6 +25,9 @@ export interface ConnectionTestDraft {
 const status = ref<ConnectionTestStatus>("")
 const message = ref("")
 const testing = ref(false)
+// Endpoint the last run targeted, so the footer can show what was actually
+// requested even if the draft is edited mid-test.
+const targetUrl = ref("")
 
 /**
  * Run the connection test against the given draft and publish the outcome to
@@ -38,6 +41,7 @@ export async function runConnectionTest(draft: ConnectionTestDraft): Promise<voi
   status.value = "testing"
   message.value = ""
   testing.value = true
+  targetUrl.value = draft.baseUrl
 
   try {
     const payload: ProviderTestRequest = {
@@ -64,7 +68,26 @@ export async function runConnectionTest(draft: ConnectionTestDraft): Promise<voi
   }
 }
 
+/**
+ * Forget the last test outcome. Call it when the configuration a result
+ * describes changes, so a stale "Connected" badge never outlives the endpoint
+ * and model it was earned against.
+ */
+export function clearConnectionTestStatus(): void {
+  status.value = ""
+  message.value = ""
+  testing.value = false
+  targetUrl.value = ""
+}
+
 /** Reactive connection-test result (read-only by convention). */
 export function useConnectionTest() {
-  return { status, message, testing, runTest: runConnectionTest }
+  return {
+    status,
+    message,
+    testing,
+    targetUrl,
+    runTest: runConnectionTest,
+    clearStatus: clearConnectionTestStatus,
+  }
 }

@@ -140,9 +140,8 @@ Presentation-only; no model server response is required for most of them.
 5. Use the context slider: the numeric **Context size** field and the two
    badges (card header, header model pill) update together, and the slider
    highlights the nearest power-of-two step.
-6. On an empty chat, the canvas shows the welcome state. Clicking a suggestion
-   only prefills the composer (it does not send anything); the prompt can still
-   be edited or deleted before sending.
+6. On an empty chat, the canvas shows the welcome state and the composer starts
+   empty; type a message and send it as usual.
 7. The composer floats above the canvas; **Enter** sends, **Shift + Enter** adds
    a newline, and **Attach document** / the attached-file chip work as before.
 8. Resize to a narrow viewport (or zoom): the sidebar stacks above the chat,

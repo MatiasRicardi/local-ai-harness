@@ -49,13 +49,8 @@ function handleEnter(event: KeyboardEvent) {
   }
 }
 
-// Prefill the draft from the parent (the empty-state suggestions) without
-// handing the draft to the parent as permanent state.
-function insertText(next: string) {
-  text.value = next
-  focus()
-}
-
+// Focus the composer. Exposed so a parent could move the caret to it on
+// demand; the app currently relies on the native focus ring instead.
 function focus() {
   const element = textareaRef.value
   if (!element) return
@@ -64,7 +59,7 @@ function focus() {
   element.setSelectionRange(length, length)
 }
 
-defineExpose({ insertText, focus })
+defineExpose({ focus })
 </script>
 
 <template>
