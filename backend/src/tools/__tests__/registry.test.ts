@@ -3,6 +3,7 @@ import {
   MapToolRegistry,
   createToolRegistry,
   ToolRegistrationError,
+  ToolExecutionPolicyError,
 } from "../registry.js";
 import type { Tool, ToolDefinition } from "../types.js";
 import { AppError } from "../../utils/errorHandler.js";
@@ -134,6 +135,78 @@ describe("createToolRegistry", () => {
 
     expect(() => registry.register(buildTool(SEARCH_DEFINITION))).not.toThrow();
     expect(registry.get("web_search")).toBeDefined();
+  });
+});
+
+// ── execution policy: internal metadata, never provider-facing ────────────────
+
+describe("MapToolRegistry executionPolicy is internal metadata", () => {
+  it("does not leak executionPolicy through listDefinitions", () => {
+    const registry = new MapToolRegistry();
+    const tool: Tool = {
+      definition: SEARCH_DEFINITION,
+      executionPolicy: { maxExecutionsPerTurn: 1 },
+      execute: async () => ({ content: "ok" }),
+    };
+    registry.register(tool);
+
+    const definitions = registry.listDefinitions();
+    expect(definitions).toEqual([SEARCH_DEFINITION]);
+
+    // The provider-facing definition must carry no policy field whatsoever.
+    for (const definition of definitions) {
+      expect(definition).not.toHaveProperty("executionPolicy");
+    }
+  });
+
+  it("keeps executionPolicy on the registered tool for the orchestrator", () => {
+    const registry = new MapToolRegistry();
+    const tool: Tool = {
+      definition: SEARCH_DEFINITION,
+      executionPolicy: { maxExecutionsPerTurn: 2 },
+      execute: async () => ({ content: "ok" }),
+    };
+    registry.register(tool);
+
+    expect(registry.get("web_search")?.executionPolicy).toEqual({
+      maxExecutionsPerTurn: 2,
+    });
+  });
+});
+
+// ── execution policy validation at registration ───────────────────────────────
+
+describe("MapToolRegistry validates executionPolicy", () => {
+  it("accepts a positive integer limit", () => {
+    const registry = new MapToolRegistry();
+
+    expect(() =>
+      registry.register({
+        definition: SEARCH_DEFINITION,
+        executionPolicy: { maxExecutionsPerTurn: 3 },
+        execute: async () => ({ content: "ok" }),
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts a tool without an executionPolicy", () => {
+    const registry = new MapToolRegistry();
+
+    expect(() =>
+      registry.register(buildTool(SEARCH_DEFINITION)),
+    ).not.toThrow();
+  });
+
+  it.each([0, -1, 2.5])("rejects a non-positive-integer limit (%p)", (limit) => {
+    const registry = new MapToolRegistry();
+
+    expect(() =>
+      registry.register({
+        definition: SEARCH_DEFINITION,
+        executionPolicy: { maxExecutionsPerTurn: limit },
+        execute: async () => ({ content: "ok" }),
+      }),
+    ).toThrow(ToolExecutionPolicyError);
   });
 });
 

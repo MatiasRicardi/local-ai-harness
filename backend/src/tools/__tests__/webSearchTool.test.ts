@@ -74,6 +74,28 @@ describe("web_search definition", () => {
   });
 });
 
+// ── execution policy ──────────────────────────────────────────────────────────
+
+describe("web_search execution policy", () => {
+  it("declares a one-per-turn execution limit", () => {
+    const tool = createWebSearchTool(
+      { maxResults: 3, searchDepth: "basic" },
+      createFakeProvider(),
+    );
+
+    expect(tool.executionPolicy).toEqual({ maxExecutionsPerTurn: 1 });
+  });
+
+  it("keeps the policy out of the provider-facing definition", () => {
+    const tool = createWebSearchTool(
+      { maxResults: 3, searchDepth: "basic" },
+      createFakeProvider(),
+    );
+
+    expect(tool.definition).not.toHaveProperty("executionPolicy");
+  });
+});
+
 // ── execution ─────────────────────────────────────────────────────────────────
 
 describe("web_search execution", () => {

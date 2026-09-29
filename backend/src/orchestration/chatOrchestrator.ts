@@ -65,8 +65,8 @@ export interface ChatOrchestrationInput {
 export type ChatOrchestrationEvent =
   | { type: "delta"; text: string }
   | { type: "done" }
-  | { type: "tool_start"; name: string; query?: string }
-  | { type: "tool_end"; name: string; resultCount: number }
+  | { type: "tool_start"; name: string }
+  | { type: "tool_end"; name: string }
   | { type: "sources"; sources: SourceRef[] };
 
 /** Outcome of consuming one model round. */
@@ -246,16 +246,10 @@ export class ChatOrchestrator {
       tool.validate(args);
     }
 
-    // The search has started: emit tool_start exactly once, immediately before
-    // execution. The tool name comes from the tool definition (generic); the
-    // query is included only when it is a plain string.
-    const query =
-      typeof args === "object" && args !== null && typeof (args as { query?: unknown }).query === "string"
-        ? (args as { query: string }).query
-        : undefined;
-    yield query === undefined
-      ? { type: "tool_start", name: tool.definition.name }
-      : { type: "tool_start", name: tool.definition.name, query };
+    // The tool has started: emit tool_start exactly once, immediately before
+    // execution. The event is generic (tool name only) so it stays valid for
+    // any tool, not just web search.
+    yield { type: "tool_start", name: tool.definition.name };
 
     // Execute. The same cancellation signal reaches the tool.
     let result: ToolExecutionResult;
@@ -291,8 +285,7 @@ export class ChatOrchestrator {
     // the sources whose blocks actually entered the model's round-2 context
     // (see `includedSourceIds`): the tool-result content is budgeted and may be
     // truncated, so a source emitted to the UI but never sent to the model must
-    // not be surfaced. `resultCount` matches the number of sources emitted,
-    // including when that is zero.
+    // not be surfaced.
     const sanitizedSources = sanitizeSources(result.metadata?.sources);
     const { messages: round2Messages, delivered } = await this.buildRound2Messages(
       input,
@@ -300,7 +293,7 @@ export class ChatOrchestrator {
       result,
     );
     const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
-    yield { type: "tool_end", name: tool.definition.name, resultCount: deliveredSources.length };
+    yield { type: "tool_end", name: tool.definition.name };
     yield { type: "sources", sources: deliveredSources };
 
     yield* this.streamRoundLive({

@@ -100,6 +100,11 @@ export function createWebSearchTool(
 ): Tool {
   return {
     definition: webSearchToolDefinition,
+    // Harness-internal per-turn limit: at most one web_search per user turn.
+    // Preserves the v1.1.0 cost/control behavior for the single-step path and
+    // for the multi-step orchestrator (Step 41 enforces it centrally). This
+    // policy is never serialized into the provider-facing definition.
+    executionPolicy: { maxExecutionsPerTurn: 1 },
     validate: validateWebSearchArgs,
 
     async execute(

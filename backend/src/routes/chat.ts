@@ -236,10 +236,10 @@ const chat: FastifyPluginAsync = async (server) => {
    * structured events between `start` and the final answer (no search path
    * emits them):
    *   event: tool_start
-   *   data: {"name":"web_search"} | {"name":"web_search","query":"..."}
+   *   data: {"name":"web_search"}
    *
    *   event: tool_end
-   *   data: {"name":"web_search","resultCount":5}
+   *   data: {"name":"web_search"}
    *
    *   event: sources
    *   data: {"sources":[{"id":1,"title":"...","url":"..."}]}
@@ -377,18 +377,16 @@ const chat: FastifyPluginAsync = async (server) => {
               data: {},
             });
           } else if (event.type === "tool_start") {
-            // Optionally carry the safe query; never a base URL, key or header.
+            // Generic lifecycle event: only the tool name, never a query, base
+            // URL, key or header.
             await reply.sse.send({
               event: "tool_start",
-              data:
-                event.query === undefined
-                  ? { name: event.name }
-                  : { name: event.name, query: event.query },
+              data: { name: event.name },
             });
           } else if (event.type === "tool_end") {
             await reply.sse.send({
               event: "tool_end",
-              data: { name: event.name, resultCount: event.resultCount },
+              data: { name: event.name },
             });
           } else if (event.type === "sources") {
             // Backend-grounded source metadata: sanitized to { id, title, url }
