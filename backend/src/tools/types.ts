@@ -39,6 +39,25 @@ export interface ToolExecutionResult {
 }
 
 /**
+ * Internal, harness-only per-tool execution policy.
+ *
+ * This is metadata the orchestrator may use to gate how a tool behaves inside
+ * a single turn (e.g. how many times it may run). It is intentionally small
+ * and explicit — no policy engine. It is never serialized into the provider-
+ * facing {@link ToolDefinition}, so the model cannot observe or change it.
+ */
+export interface ToolExecutionPolicy {
+  /**
+   * Maximum number of times this tool may execute within a single user turn.
+   *
+   * When present it must be a positive integer (enforced where tools are
+   * registered). Omitting it means the tool has no per-turn execution limit
+   * from this policy.
+   */
+  maxExecutionsPerTurn?: number;
+}
+
+/**
  * A tool is a named, executable unit.
  *
  * `args` is intentionally `unknown`: each concrete tool owns its argument
@@ -49,6 +68,13 @@ export interface ToolExecutionResult {
  */
 export interface Tool {
   definition: ToolDefinition;
+  /**
+   * Optional, harness-internal execution policy for this tool.
+   *
+   * It is never sent to the provider and must not influence the tool
+   * definition. Enforced centrally by the orchestrator (not here).
+   */
+  executionPolicy?: ToolExecutionPolicy;
   /**
    * Optional pre-execution validation of the model-supplied arguments.
    *

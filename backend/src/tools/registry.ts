@@ -1,6 +1,23 @@
 import type { Tool, ToolDefinition, ToolRegistry } from "./types.js";
 
 /**
+ * Raised when a tool declares an invalid internal execution policy.
+ *
+ * This is internal infrastructure: it never crosses an HTTP/SSE boundary, so it
+ * does not need to map onto `AppError`. It signals a programming/configuration
+ * error at registration time.
+ */
+export class ToolExecutionPolicyError extends Error {
+  readonly toolName: string;
+
+  constructor(toolName: string) {
+    super(`Invalid execution policy for tool "${toolName}": maxExecutionsPerTurn must be a positive integer.`);
+    this.name = "ToolExecutionPolicyError";
+    this.toolName = toolName;
+  }
+}
+
+/**
  * Raised when a tool name is registered more than once.
  *
  * This is internal infrastructure: it never crosses an HTTP/SSE boundary, so it
@@ -30,6 +47,16 @@ export class MapToolRegistry implements ToolRegistry {
     const name = tool.definition.name;
     if (this.tools.has(name)) {
       throw new ToolRegistrationError(name);
+    }
+    // Validate the internal execution policy up front so an invalid limit
+    // fails fast at registration rather than silently at run time. The
+    // orchestrator relies on this invariant when it later enforces the limit.
+    const limit = tool.executionPolicy?.maxExecutionsPerTurn;
+    if (
+      typeof limit === "number" &&
+      (!Number.isInteger(limit) || limit <= 0)
+    ) {
+      throw new ToolExecutionPolicyError(name);
     }
     this.tools.set(name, tool);
   }

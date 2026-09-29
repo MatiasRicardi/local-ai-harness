@@ -116,11 +116,9 @@ export interface StreamEvent {
     code?: string
     detail?: string
     context?: ContextTruncationMetadata
-    // Tool lifecycle (web search). `name` is the tool name; `query`/`resultCount`
-    // and `sources` are optional per event.
+    // Tool lifecycle (web search). `name` is the generic tool name; `sources`
+    // is optional. `tool_start`/`tool_end` carry only `name`.
     name?: string
-    query?: string
-    resultCount?: number
     sources?: unknown
   }
 }
@@ -136,8 +134,8 @@ export interface StreamCallbacks {
   // Tool lifecycle callbacks are optional: the UI may observe them (Step 34)
   // without the parser depending on any UI component. Absent callbacks are
   // simply ignored — the events still parse and advance the stream.
-  onToolStart?: (payload: { name: string; query?: string }) => void
-  onToolEnd?: (payload: { name: string; resultCount: number }) => void
+  onToolStart?: (payload: { name: string }) => void
+  onToolEnd?: (payload: { name: string }) => void
   onSources?: (sources: WebSearchSource[]) => void
 }
 
@@ -283,8 +281,6 @@ function dispatchEvent(
       message?: string
       context?: ContextTruncationMetadata
       name?: string
-      query?: string
-      resultCount?: number
       sources?: unknown
     }
 
@@ -312,19 +308,13 @@ function dispatchEvent(
       case "tool_start": {
         // Optional callback: ignore when the UI does not observe tool events.
         if (callbacks.onToolStart && typeof parsed.name === "string") {
-          callbacks.onToolStart({
-            name: parsed.name,
-            ...(typeof parsed.query === "string" ? { query: parsed.query } : {}),
-          })
+          callbacks.onToolStart({ name: parsed.name })
         }
         break
       }
       case "tool_end": {
         if (callbacks.onToolEnd && typeof parsed.name === "string") {
-          callbacks.onToolEnd({
-            name: parsed.name,
-            resultCount: typeof parsed.resultCount === "number" ? parsed.resultCount : 0,
-          })
+          callbacks.onToolEnd({ name: parsed.name })
         }
         break
       }

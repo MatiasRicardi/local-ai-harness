@@ -235,9 +235,9 @@ describe("web search chat integration", () => {
     expect(pos("tool_end")).toBeLessThan(pos("sources"));
     expect(pos("sources")).toBeLessThan(pos("delta"));
 
-    // tool_start carries the tool name and the safe query only.
+    // tool_start carries the generic tool name only (no query, no search-
+    // specific field) — the generic lifecycle contract.
     expect(body).toContain('"name":"web_search"');
-    expect(body).toContain('"query":"cats"');
 
     // Sources are backend-grounded: id + title + url only, no content/score.
     expect(body).toContain("event: sources");

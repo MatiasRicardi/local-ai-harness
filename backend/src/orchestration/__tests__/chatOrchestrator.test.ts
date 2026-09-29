@@ -271,8 +271,8 @@ describe("ChatOrchestrator — valid single tool call", () => {
     // The pre-tool filler text is discarded; only round 2 text is visible. The
     // tool lifecycle is exposed as structured events before the final answer.
     expect(events).toEqual([
-      { type: "tool_start", name: "web_search", query: "weather" },
-      { type: "tool_end", name: "web_search", resultCount: 0 },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
       { type: "sources", sources: [] },
       { type: "delta", text: "The weather is sunny." },
       { type: "done" },
@@ -298,6 +298,34 @@ describe("ChatOrchestrator — valid single tool call", () => {
     });
     expect(round2[2]).toMatchObject({ role: "tool", tool_call_id: "call_1" });
     expect(round2[2].content).toBe("Search results: ...");
+  });
+
+  it("emits generic tool_start/tool_end events with no search-specific fields", async () => {
+    const tool = createTool("web_search", "Search results: ...");
+    const { client } = createRecordingClient([
+      ...TOOL_CALL_EVENTS,
+      { choices: [{ delta: { content: "The weather is sunny." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      "[DONE]",
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("what is the weather")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    const toolStart = events.find((event) => event.type === "tool_start");
+    const toolEnd = events.find((event) => event.type === "tool_end");
+
+    // The lifecycle events are generic: only the tool name, no `query`/`resultCount`
+    // that were web-search specific. This keeps the contract valid for any tool.
+    expect(toolStart).toEqual({ type: "tool_start", name: "web_search" });
+    expect(toolEnd).toEqual({ type: "tool_end", name: "web_search" });
+    expect(toolStart).not.toHaveProperty("query");
+    expect(toolEnd).not.toHaveProperty("resultCount");
   });
 
   it("emits only the sources whose blocks entered the (truncated) context", async () => {
@@ -333,7 +361,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
     const sourcesEvent = events.find(
       (event) => event.type === "sources",
     ) as { type: "sources"; sources: unknown[] } | undefined;
-    expect(toolEnd).toMatchObject({ name: "web_search", resultCount: 1 });
+    expect(toolEnd).toMatchObject({ name: "web_search" });
     expect(sourcesEvent).toMatchObject({ type: "sources" });
     if (sourcesEvent) {
       expect(sourcesEvent.sources).toEqual([
@@ -388,7 +416,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
     const sourcesEvent = events.find(
       (event) => event.type === "sources",
     ) as { type: "sources"; sources: unknown[] } | undefined;
-    expect(toolEnd).toMatchObject({ name: "web_search", resultCount: 1 });
+    expect(toolEnd).toMatchObject({ name: "web_search" });
     expect(sourcesEvent).toMatchObject({ type: "sources" });
     if (sourcesEvent) {
       expect(sourcesEvent.sources).toEqual([
@@ -448,7 +476,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
     const sourcesEvent = events.find(
       (event) => event.type === "sources",
     ) as { type: "sources"; sources: unknown[] } | undefined;
-    expect(toolEnd).toMatchObject({ name: "web_search", resultCount: 1 });
+    expect(toolEnd).toMatchObject({ name: "web_search" });
     if (sourcesEvent) {
       expect(sourcesEvent.sources).toEqual([
         { id: 1, title: "First", url: "https://example.com/1" },
@@ -491,7 +519,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
 
     const toolEnd = events.find((event) => event.type === "tool_end");
     const sourcesEvent = events.find((event) => event.type === "sources");
-    expect(toolEnd).toMatchObject({ name: "web_search", resultCount: 0 });
+    expect(toolEnd).toMatchObject({ name: "web_search" });
     expect(sourcesEvent).toMatchObject({ type: "sources", sources: [] });
 
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
@@ -757,15 +785,15 @@ describe("ChatOrchestrator — tool lifecycle events", () => {
 
     // tool events precede the round-2 streaming answer.
     expect(events).toEqual([
-      { type: "tool_start", name: "web_search", query: "weather" },
-      { type: "tool_end", name: "web_search", resultCount: 1 },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
       { type: "sources", sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }] },
       { type: "delta", text: "final" },
       { type: "done" },
     ]);
   });
 
-  it("emits tool_end with resultCount equal to sanitized sources on zero results", async () => {
+  it("emits tool_end with only a name on zero results", async () => {
     const tool = createTool("web_search", "result", async () => ({ content: "result", metadata: { sources: [] } }));
     const { client } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
 
@@ -778,8 +806,8 @@ describe("ChatOrchestrator — tool lifecycle events", () => {
     );
 
     expect(events).toEqual([
-      { type: "tool_start", name: "web_search", query: "weather" },
-      { type: "tool_end", name: "web_search", resultCount: 0 },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
       { type: "sources", sources: [] },
       { type: "delta", text: "final" },
       { type: "done" },
@@ -831,7 +859,7 @@ describe("ChatOrchestrator — tool lifecycle events", () => {
 
     // The search had started, so tool_start is emitted; the failure surfaces as
     // the structured error with no tool_end and no sources.
-    expect(events).toEqual([{ type: "tool_start", name: "web_search", query: "weather" }]);
+    expect(events).toEqual([{ type: "tool_start", name: "web_search" }]);
     expect((error as AppError).code).toBe("PROVIDER_TIMEOUT");
   });
 });
@@ -883,7 +911,7 @@ describe("ChatOrchestrator — cancellation", () => {
       }),
     );
 
-    expect(events).toEqual([{ type: "tool_start", name: "web_search", query: "weather" }]);
+    expect(events).toEqual([{ type: "tool_start", name: "web_search" }]);
     expect(tool.execute).toHaveBeenCalledTimes(1);
     // Only round 1 was issued; no round-2 request.
     expect(calls.length).toBe(1);
