@@ -5,12 +5,13 @@ import type { FrontendApiError } from "../types/error"
 import { isValidSourceUrl } from "../services/chat"
 import { renderMarkdown } from "../utils/markdown"
 
-type GenerationActivity = "idle" | "searching" | "generating"
+type GenerationActivity = "idle" | "tool" | "generating"
 
 interface Props {
   messages: Message[]
   loading: boolean
   activity: GenerationActivity
+  activeToolName: string | null
   error: FrontendApiError | null
   stopped: boolean
 }
@@ -21,10 +22,21 @@ const props = defineProps<Props>()
 // response, so deriving it from the live model name would relabel historical
 // answers whenever the provider model changes. Use a stable "Assistant" label.
 const assistantLabel = computed(() => "Assistant")
-// The transient web-search line temporarily replaces "Generating…" while the
-// backend runs the search tool (Step 34). The animated dots stay either way.
+// One place that turns a live tool name into a human, tool-agnostic status line.
+// Unknown tools never leak their internal name; they fall back to a generic
+// label so the line stays meaningful for any tool the backend may run.
+const TOOL_ACTIVITY_LABELS: Record<string, string> = {
+  web_search: "Searching the web…",
+  fetch_url: "Reading a web page…",
+  calculator: "Calculating…",
+}
+const UNKNOWN_TOOL_LABEL = "Using a tool…"
+// The transient tool line temporarily replaces "Generating…" while the backend
+// runs a tool. The animated dots stay either way.
 const activityLabel = computed(() =>
-  props.activity === "searching" ? "Searching the web…" : "Generating...",
+  props.activity === "tool" && props.activeToolName
+    ? (TOOL_ACTIVITY_LABELS[props.activeToolName] ?? UNKNOWN_TOOL_LABEL)
+    : "Generating...",
 )
 
 function renderAssistantContent(content: string): string {

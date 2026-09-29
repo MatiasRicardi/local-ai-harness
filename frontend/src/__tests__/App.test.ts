@@ -429,8 +429,8 @@ describe("App integration", () => {
     })
   })
 
-  describe("web search activity & sources", () => {
-    it("shows searching activity during tool_start and returns to generating", async () => {
+  describe("tool activity & sources", () => {
+    it("shows tool activity during tool_start and returns to generating", async () => {
       useWebSearchSettings().updateWebSearchSettings({
         enabled: true,
         apiKey: "tly-abc",
@@ -439,17 +439,17 @@ describe("App integration", () => {
       })
       wrapper = mountApp()
 
-      await sendMessage(wrapper, "with search")
+      await sendMessage(wrapper, "with tool")
       hoisted.callbacks.onStart("m", undefined)
       await nextTick()
 
-      // tool_start temporarily replaces "Generating…" with the search line.
+      // tool_start temporarily replaces "Generating…" with the tool line.
       hoisted.callbacks.onToolStart({ name: "web_search" })
       await nextTick()
       expect(wrapper.find(".loading").text()).toContain("Searching the web…")
 
-      // tool_end transitions back to the normal generating state.
-      hoisted.callbacks.onToolEnd({ name: "web_search", resultCount: 2 })
+      // The matching tool_end transitions back to the normal generating state.
+      hoisted.callbacks.onToolEnd({ name: "web_search" })
       await nextTick()
       expect(wrapper.find(".loading").text()).toContain("Generating...")
 
@@ -457,6 +457,22 @@ describe("App integration", () => {
       hoisted.callbacks.onDelta("Answer")
       await nextTick()
       expect(wrapper.find(".message-assistant").text()).toContain("Answer")
+    })
+
+    it("maps a non-search tool name to its own label", async () => {
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with calculator")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+
+      hoisted.callbacks.onToolStart({ name: "calculator" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Calculating…")
+
+      hoisted.callbacks.onToolEnd({ name: "calculator" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Generating...")
     })
 
     it("attaches backend sources to the correct assistant turn", async () => {
@@ -472,7 +488,7 @@ describe("App integration", () => {
       hoisted.callbacks.onStart("m", undefined)
       await nextTick()
       hoisted.callbacks.onToolStart({ name: "web_search" })
-      hoisted.callbacks.onToolEnd({ name: "web_search", resultCount: 2 })
+      hoisted.callbacks.onToolEnd({ name: "web_search" })
       await nextTick()
 
       hoisted.callbacks.onSources([
@@ -559,7 +575,7 @@ describe("App integration", () => {
       expect(links[0].attributes("href")).toBe("https://safe.example")
     })
 
-    it("clears sources and activity on reset", async () => {
+    it("clears sources and tool activity on reset", async () => {
       useWebSearchSettings().updateWebSearchSettings({
         enabled: true,
         apiKey: "tly-abc",
@@ -571,6 +587,9 @@ describe("App integration", () => {
       await sendMessage(wrapper, "with search")
       hoisted.callbacks.onStart("m", undefined)
       await nextTick()
+      hoisted.callbacks.onToolStart({ name: "web_search" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Searching the web…")
       hoisted.callbacks.onSources([
         { id: 1, title: "Source", url: "https://example.com" },
       ])
@@ -580,6 +599,8 @@ describe("App integration", () => {
       await wrapper.find("button[aria-label='Start a new conversation']").trigger("click")
       await nextTick()
 
+      // Reset clears both the transient tool activity and the sources block.
+      expect(wrapper.find(".loading").exists()).toBe(false)
       expect(wrapper.find(".sources").exists()).toBe(false)
     })
 
@@ -606,6 +627,43 @@ describe("App integration", () => {
       await nextTick()
 
       expect(wrapper.find(".sources").exists()).toBe(false)
+      expect(wrapper.find(".loading").exists()).toBe(false)
+    })
+
+    it("clears tool activity when the turn completes normally", async () => {
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "done")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+      hoisted.callbacks.onToolStart({ name: "calculator" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Calculating…")
+
+      // onDone runs cleanup, so the tool activity must disappear.
+      hoisted.callbacks.onDone()
+      await nextTick()
+      expect(wrapper.find(".loading").exists()).toBe(false)
+    })
+
+    it("clears tool activity on a chat error", async () => {
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "error")
+      hoisted.callbacks.onStart("m", undefined)
+      await nextTick()
+      hoisted.callbacks.onToolStart({ name: "fetch_url" })
+      await nextTick()
+      expect(wrapper.find(".loading").text()).toContain("Reading a web page…")
+
+      // onError runs cleanup, so the tool activity must disappear.
+      hoisted.callbacks.onError(
+        new FrontendApiError({
+          code: "CONTEXT_TOO_LARGE",
+          message: "Context limit reached.",
+        }),
+      )
+      await nextTick()
       expect(wrapper.find(".loading").exists()).toBe(false)
     })
   })
