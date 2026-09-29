@@ -28,6 +28,10 @@ const testing = ref(false)
 // Endpoint the last run targeted, so the footer can show what was actually
 // requested even if the draft is edited mid-test.
 const targetUrl = ref("")
+// Monotonic counter identifying the in-flight test. A completion only publishes
+// its result if it still matches the latest run, so a stale request that resolves
+// after the target changes (or after clearStatus) can never overwrite a newer one.
+let runVersion = 0
 
 /**
  * Run the connection test against the given draft and publish the outcome to
@@ -38,6 +42,7 @@ const targetUrl = ref("")
 export async function runConnectionTest(draft: ConnectionTestDraft): Promise<void> {
   if (!draft.baseUrl || !draft.model) return
 
+  const requestVersion = ++runVersion
   status.value = "testing"
   message.value = ""
   testing.value = true
@@ -52,6 +57,7 @@ export async function runConnectionTest(draft: ConnectionTestDraft): Promise<voi
     }
 
     const response = await testProviderConnection(payload)
+    if (requestVersion !== runVersion) return
 
     if (response.success) {
       status.value = "success"
@@ -61,10 +67,11 @@ export async function runConnectionTest(draft: ConnectionTestDraft): Promise<voi
       message.value = response.error || "Connection failed"
     }
   } catch (err) {
+    if (requestVersion !== runVersion) return
     status.value = "error"
     message.value = err instanceof Error ? err.message : "Connection failed"
   } finally {
-    testing.value = false
+    if (requestVersion === runVersion) testing.value = false
   }
 }
 
@@ -74,6 +81,7 @@ export async function runConnectionTest(draft: ConnectionTestDraft): Promise<voi
  * and model it was earned against.
  */
 export function clearConnectionTestStatus(): void {
+  runVersion += 1
   status.value = ""
   message.value = ""
   testing.value = false

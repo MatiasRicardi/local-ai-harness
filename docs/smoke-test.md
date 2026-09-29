@@ -70,7 +70,7 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
    [`docs/docker.md`](docker.md#the-model-server-must-be-reachable-from-docker)
    first.
    
-   Then, in **Provider Settings**, set the base URL to:
+   Then, in **Model Settings**, set the base URL to:
    - `http://host.docker.internal:<provider-port>`
 
    For example, Ollama on port 11434 → `http://host.docker.internal:11434`.
@@ -93,7 +93,7 @@ local models do **not**.
 1. Ensure the backend has `AI_TAVILY_BASE_URL` configured or defaulted
    (`https://api.tavily.com`). No code change is needed to override it (see
    step 11).
-2. Configure a tool-capable local model in **Provider Settings**, then send a
+2. Configure a tool-capable local model in **Model Settings**, then send a
    message to confirm tool calling works.
 3. Open **Web Search settings** (separate from provider settings) and enter your
    Tavily API key. The key is stored only in your browser and sent to the backend
@@ -161,7 +161,7 @@ Presentation-only; no model server response is required for most of them.
 | Send a message               | Streamed markdown response        |
 | Stop / cancel                | Generation halts                  |
 | Attach document + ask        | Answer references the document    |
-| Reset conversation           | Chat clears                       |
+| New Chat                     | Chat clears                       |
 
 | Web search turn (Flow C)     | Search activity + cited sources   |
 | Disable web search           | Ordinary chat resumes             |
