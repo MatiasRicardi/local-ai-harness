@@ -11,9 +11,12 @@ import {
 import { useProviderSettings } from "./composables/useProviderSettings"
 import { useWebSearchSettings } from "./composables/useWebSearchSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
+import AppHeader from "./components/AppHeader.vue"
 import ChatMessages from "./components/ChatMessages.vue"
+import ChatEmptyState from "./components/ChatEmptyState.vue"
 import DocumentAttachment from "./components/DocumentAttachment.vue"
 import ChatInput from "./components/ChatInput.vue"
+import { useConnectionTest } from "./composables/useConnectionTest"
 import type { Message } from "./types"
 import type { AttachedDocument } from "./services/files"
 import { FrontendApiError, type AppErrorArea } from "./types/error"
@@ -51,6 +54,10 @@ let generationId = 0
 const chatInputResetKey = ref(0)
 const attachmentResetVersion = ref(0)
 
+// Outcome of the explicit Test Connection action, shown as a neutral dot in the
+// header (never a health poll, and blank until the user tests).
+const { status: connectionStatus } = useConnectionTest()
+
 const providerSettings = useProviderSettings()
 const webSearchSettings = useWebSearchSettings()
 
@@ -79,6 +86,12 @@ const configuredContext = computed(() => {
 type GenerationActivity = "idle" | "searching" | "generating"
 const searchActivity = computed<GenerationActivity>(() =>
   loading.value ? (webSearching.value ? "searching" : "generating") : "idle",
+)
+
+// Show the welcome screen only for a genuinely empty transcript: an error,
+// a stopped turn or any message keeps the transcript itself on screen.
+const showEmptyState = computed(
+  () => messages.value.length === 0 && !chatError.value && !stopped.value,
 )
 
 function scrollToBottom(behavior: ScrollBehavior = "auto") {
@@ -395,86 +408,34 @@ async function handleSend(text: string) {
 </script>
 
 <template>
-  <div id="app" class="flex min-h-dvh flex-col bg-white text-stone-800 lg:h-dvh lg:overflow-hidden">
-    <!-- Full-width header: app identity, configured model, endpoint summary, reset. -->
-    <header
-      class="header flex h-14 shrink-0 items-center justify-between gap-3 border-b border-stone-200/80 bg-white/90 px-4 backdrop-blur-md md:px-5"
-    >
-      <div class="flex min-w-0 items-center gap-3">
-        <div
-          class="app-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 text-white shadow-sm shadow-sky-500/20"
-        >
-          <svg
-            class="size-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.9"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <rect x="7" y="7" width="10" height="10" rx="2.5" />
-            <path d="M10.5 10.5h3v3h-3z" fill="currentColor" stroke="none" />
-            <path d="M9.5 4v3M12 4v3M14.5 4v3M9.5 17v3M12 17v3M14.5 17v3M4 9.5h3M4 12h3M4 14.5h3M17 9.5h3M17 12h3M17 14.5h3" />
-          </svg>
-        </div>
-        <div class="flex min-w-0 items-center gap-2.5">
-          <h1 class="truncate text-sm font-semibold tracking-tight text-stone-900">Local AI Harness</h1>
-          <!-- Decorative separator: the badge is the configured model, not a status. -->
-          <span v-if="configuredModel" class="text-stone-300" aria-hidden="true">/</span>
-          <span
-            v-if="configuredModel"
-            class="model-badge hidden min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[0.6875rem] font-medium text-stone-700 sm:flex"
-            :title="configuredModel"
-          >
-            <span class="size-1.5 shrink-0 rounded-full bg-sky-500" aria-hidden="true"></span>
-            <span class="truncate font-mono">{{ configuredModel }}</span>
-          </span>
-        </div>
-      </div>
-      <div class="flex shrink-0 items-center gap-3">
-        <div
-          v-if="endpointSummary.host"
-          class="endpoint-summary hidden min-w-0 items-center gap-1 rounded-md border border-stone-200/50 bg-stone-100/80 px-2.5 py-1 text-xs text-stone-400 lg:flex"
-        >
-          <template v-if="endpointSummary.name">
-            <span class="max-w-[10rem] min-w-0 truncate font-mono text-[0.6875rem]">{{ endpointSummary.name }}</span>
-            <span class="text-stone-300" aria-hidden="true">&bull;</span>
-          </template>
-          <span class="max-w-[14rem] min-w-0 truncate">{{ endpointSummary.host }}</span>
-        </div>
-        <button
-          type="button"
-          class="header-new-conversation focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3.5 py-1.5 text-xs font-medium text-stone-700 shadow-sm transition-colors duration-150 hover:bg-stone-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label="Start a new conversation"
-          @click="handleReset"
-        >
-          <svg
-            class="size-3.5 shrink-0 text-stone-400"
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.75"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <path d="M10 4.5v11M4.5 10h11" />
-          </svg>
-          <span>New conversation</span>
-        </button>
-      </div>
-    </header>
+  <div id="app" class="flex min-h-dvh flex-col bg-slate-50 text-slate-800 lg:h-dvh lg:overflow-hidden">
+    <!-- Full-width header: app identity, configured endpoint/model, reset. -->
+    <AppHeader
+      class="header"
+      :provider-name="endpointSummary.name"
+      :endpoint-host="endpointSummary.host"
+      :model="configuredModel"
+      :context-label="configuredContext"
+      :connection-status="connectionStatus"
+      @reset="handleReset"
+    />
     <main class="flex min-h-0 flex-1 flex-col lg:flex-row lg:overflow-hidden">
       <!-- Sidebar: stacks above the chat on narrow viewports, scrolls on its own on desktop. -->
       <aside
-        class="sidebar shrink-0 border-b border-stone-200/75 bg-stone-50 lg:min-h-0 lg:w-88 lg:overflow-y-auto lg:border-b-0 lg:border-r"
+        class="sidebar shrink-0 border-b border-slate-200 bg-slate-100/70 lg:flex lg:min-h-0 lg:w-[340px] lg:flex-col lg:overflow-hidden lg:border-b-0 lg:border-r"
       >
         <ProviderSettings />
       </aside>
-      <section class="chat-area flex min-w-0 flex-1 flex-col bg-white lg:min-h-0 lg:overflow-hidden">
+      <section class="chat-area flex min-w-0 flex-1 flex-col bg-slate-50 lg:min-h-0 lg:overflow-hidden">
         <!-- Message stream: the only scrolling pane on desktop. -->
         <div class="chat-stream chat-dots min-h-0 flex-1 lg:overflow-y-auto">
-          <div class="chat-inner mx-auto flex w-full max-w-4xl flex-col px-4 pb-6 pt-6 md:px-8">
+          <div class="chat-inner mx-auto flex w-full max-w-3xl flex-col px-4 pb-6 pt-6 md:px-8">
+            <ChatEmptyState
+              v-if="showEmptyState"
+              :model="configuredModel"
+              :context-label="configuredContext"
+              :web-search-enabled="webSearchSettings.settings.value.enabled"
+            />
             <ChatMessages
               :messages="messages"
               :loading="loading"
@@ -506,13 +467,15 @@ async function handleSend(text: string) {
           </div>
         </div>
         <!-- Composer dock: in normal document flow on narrow screens, pinned to the
-             bottom of the workspace on desktop (the stream above scrolls alone). -->
-        <div class="composer-dock shrink-0 border-t border-stone-200/70 bg-white px-4 py-4 md:px-6">
+             bottom of the workspace on desktop (the stream above scrolls alone).
+             Floating look without a border line: elevation plus a fade so the dotted
+             canvas rolls under it. -->
+        <div class="composer-dock shrink-0 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent px-4 pb-5 pt-2 md:px-6">
           <div
-            class="composer-card mx-auto w-full max-w-3xl rounded-2xl border border-stone-200 bg-white p-2.5 shadow-lg shadow-stone-200/40 transition-all focus-within:border-sky-500 focus-within:ring-2 focus-within:ring-sky-100"
+            class="composer-card mx-auto w-full max-w-3xl rounded-2xl border border-slate-200/90 bg-white p-2.5 shadow-floating transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/15"
           >
             <div
-              class="composer-toolbar flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-stone-100 px-1.5 pb-2"
+              class="composer-toolbar flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-slate-100 px-1.5 pb-2"
             >
               <DocumentAttachment
                 class="min-w-0 flex-1"
@@ -529,10 +492,10 @@ async function handleSend(text: string) {
               <!-- Only the configured window is known: token usage is not reported. -->
               <div
                 v-if="configuredContext"
-                class="composer-context flex shrink-0 items-center gap-1 font-mono text-[0.6875rem] text-stone-400"
+                class="composer-context flex shrink-0 items-center gap-1 font-mono text-[0.6875rem] text-slate-400"
               >
                 <span>Context:</span>
-                <span class="font-medium text-stone-600">{{ configuredContext }}</span>
+                <span class="font-medium text-indigo-600">{{ configuredContext }}</span>
               </div>
             </div>
             <div

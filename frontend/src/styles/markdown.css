@@ -27,7 +27,7 @@
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
-  @apply mb-1.5 mt-4 font-semibold text-stone-900;
+  @apply mb-1.5 mt-4 font-semibold text-slate-900;
 }
 
 .markdown-content h1 {
@@ -61,15 +61,15 @@
 }
 
 .markdown-content a {
-  @apply font-medium text-sky-600 underline decoration-sky-300 underline-offset-2 hover:decoration-sky-600;
+  @apply font-medium text-indigo-600 underline decoration-indigo-300 underline-offset-2 hover:decoration-indigo-600;
 }
 
 .markdown-content blockquote {
-  @apply mb-3 border-l-2 border-stone-300 pl-4 text-stone-500;
+  @apply mb-3 border-l-2 border-slate-300 pl-4 text-slate-500;
 }
 
 .markdown-content strong {
-  @apply font-semibold text-stone-900;
+  @apply font-semibold text-slate-900;
 }
 
 .markdown-content em {
@@ -77,11 +77,11 @@
 }
 
 .markdown-content code {
-  @apply rounded border border-stone-200 bg-stone-100 px-1 py-0.5 font-mono text-[0.85em] text-stone-800;
+  @apply rounded border border-slate-200 bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] text-slate-800;
 }
 
 .markdown-content pre {
-  @apply mb-3 max-w-full overflow-x-auto rounded-lg border border-stone-200 bg-stone-100 p-3 font-mono text-[0.8125rem] leading-relaxed text-stone-900;
+  @apply mb-3 max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-slate-100 p-3 font-mono text-[0.8125rem] leading-relaxed text-slate-900;
   /* Restore a predictable tab width for fenced code containing tabs. */
   tab-size: 4;
 }
@@ -91,5 +91,5 @@
 }
 
 .markdown-content hr {
-  @apply my-4 border-t border-stone-200;
+  @apply my-4 border-t border-slate-200;
 }

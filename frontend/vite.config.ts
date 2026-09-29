@@ -1,6 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
+
+// Application version shown in the header, read from package.json so the badge
+// can never drift from the package it was built from.
+const appVersion = (
+  JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
+    version: string
+  }
+).version
 
 // https://vite.dev/config/
 //
@@ -8,6 +17,9 @@ import tailwindcss from '@tailwindcss/vite'
 // Keeping it here reuses the same plugin and dev-server proxy configuration.
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   server: {
     proxy: {
       '/api': {

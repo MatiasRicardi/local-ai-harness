@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
+import { nextTick } from "vue"
 import { mount, type VueWrapper } from "@vue/test-utils"
 import ChatInput from "../ChatInput.vue"
 
@@ -61,5 +62,16 @@ describe("ChatInput", () => {
 
     await wrapper.setProps({ resetKey: 2 })
     expect(textarea(wrapper).value).toBe("")
+  })
+
+  it("prefills the draft through insertText without sending", async () => {
+    const onSend = vi.fn()
+    wrapper = mount(ChatInput, { props: { onSend } })
+
+    ;(wrapper.vm as unknown as { insertText: (next: string) => void }).insertText("Draft a test plan")
+    await nextTick()
+
+    expect(textarea(wrapper).value).toBe("Draft a test plan")
+    expect(onSend).not.toHaveBeenCalled()
   })
 })

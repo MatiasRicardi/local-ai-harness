@@ -39,8 +39,9 @@ local-ai-harness/
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── components/          # ChatInput, ChatMessages, ProviderSettings, DocumentAttachment
-│   │   ├── composables/         # useProviderSettings
+│   │   ├── components/          # AppHeader, settings cards, ChatMessages, ChatInput,
+│   │   │                        # ChatEmptyState, DocumentAttachment, AppIcon
+│   │   ├── composables/         # useProviderSettings, useWebSearchSettings, useConnectionTest
 │   │   ├── services/            # apiBase, chat, files, provider
 │   │   ├── utils/               # markdown (markdown-it + DOMPurify), parseApiError
 │   │   ├── types/               # error types
@@ -147,14 +148,45 @@ no OCR).
 
 **Composables**:
 
-- `useProviderSettings.ts` — persists provider settings to `localStorage`.
+- `useProviderSettings.ts` — persists provider settings to `localStorage`; also
+  owns the `MIN_CONTEXT_SIZE` / `MAX_CONTEXT_SIZE` bounds and
+  `clampContextSize()` used by the context control.
 - `useWebSearchSettings.ts` — persists Tavily web-search settings (API key only;
   the base URL stays backend configuration) to `localStorage`.
+- `useConnectionTest.ts` — result of the explicit "Test Connection" action
+  (`""` / `testing` / `success` / `error` + message), shared between the sidebar
+  footer and the header status dot. It is never polled: the status stays empty
+  until the user runs a test, and the request payload is passed in by
+  `ProviderSettings` from the values currently in the form.
 
 **Components**:
 
-- `ProviderSettings.vue`, `ChatMessages.vue`, `ChatInput.vue`,
+- `AppHeader.vue` — app identity, version badge (`__APP_VERSION__`, injected at
+  build time from `package.json`), endpoint/model summary derived from the
+  settings, and the new-conversation button.
+- `ProviderSettings.vue` — the settings sidebar. Owns the settings draft, the
+  debounced persistence and the cleartext-HTTP warning, and renders the
+  `ConnectionSettings` / `RuntimeSettings` / `WebSearchSettings` cards plus the
+  sticky `ConnectionTestFooter` inside one `<form>` (the footer button submits
+  it).
+- `ConnectionSettings.vue`, `RuntimeSettings.vue`, `WebSearchSettings.vue` —
+  presentational cards bound to that draft with `v-model`; they hold no state
+  of their own (web search reads the `useWebSearchSettings` singleton).
+- `ConnectionTestFooter.vue` — sticky "Test Connection" submit button and the
+  `.status.testing` / `.status.success` / `.status.error` result panels.
+- `ChatMessages.vue`, `ChatInput.vue`, `ChatEmptyState.vue`,
   `DocumentAttachment.vue`.
+- `AppIcon.vue` — the whole glyph set as inline SVG (stroke-based, inherits
+  `currentColor`); the project deliberately has no icon dependency.
+
+`App.vue` lays the app out as header / settings sidebar (`w-[340px]` on
+ desktop, stacked on narrow screens) / scrolling chat canvas / composer dock, and
+ renders `ChatEmptyState` instead of the transcript only while the transcript is
+ empty and there is no error or stopped-turn banner. Its suggestions merely
+ prefill the composer through the `ChatInput` `insertText()` handle.
+ The palette is Tailwind v4 theme tokens (slate surfaces, indigo accent) plus a
+ few `@utility` classes in `styles/tailwind.css` (`settings-card`, `field-input`,
+ `chat-dots`, `shadow-subtle` / `shadow-floating`).
 
 `ChatMessages.vue` renders the transient generation activity derived from the
 busy flags: while the backend runs the search tool (`tool_start` → `tool_end`)
