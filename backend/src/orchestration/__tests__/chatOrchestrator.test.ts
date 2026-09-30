@@ -17,13 +17,17 @@ const WEB_SEARCH_MARKER =
  * real SSE parser can consume. A payload is either the `[DONE]` marker string
  * or an OpenAI-style streaming JSON object.
  */
-function sseStream(events: Array<string | Record<string, unknown>>): ReadableStream<Uint8Array> {
+function sseLine(event: string | Record<string, unknown>): Uint8Array {
   const encoder = new TextEncoder();
+  const line = typeof event === "string" ? event : JSON.stringify(event);
+  return encoder.encode(`data: ${line}\n\n`);
+}
+
+function sseStream(events: Array<string | Record<string, unknown>>): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of events) {
-        const line = typeof event === "string" ? event : JSON.stringify(event);
-        controller.enqueue(encoder.encode(`data: ${line}\n\n`));
+        controller.enqueue(sseLine(event));
       }
       controller.close();
     },
@@ -38,10 +42,10 @@ interface RecordedCall {
 
 /**
  * A recording fake provider client. `chatStream` returns the next SSE stream
- * per call, splitting the flat event list at each `[DONE]` marker so round 1
- * and round 2 each get exactly their own events (as a real provider would).
- * Records every call (config, messages, options) so tests can assert on the
- * round-1 / round-2 request shape.
+ * per call, splitting the flat event list at each `[DONE]` marker so each
+ * chunk gets exactly its own events (as a real provider would).
+ * Records every call (config, messages, options) so tests can assert on each
+ * round's request shape.
  */
 function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   client: ProviderClient;
@@ -72,6 +76,67 @@ function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   } as unknown as ProviderClient;
 
   return { client, calls };
+}
+
+/**
+ * Build a **pull-based** SSE stream: the first payload is enqueued immediately
+ * and each later payload only after the previous chunk has been read (the
+ * `ReadableStream` default high-water mark is 1, so `pull` runs one chunk at a
+ * time). `enqueued(index)` reports whether the payload at `index` already exists
+ * in the stream — true only once the consumer has drained everything before it.
+ *
+ * This models a live provider (a later event is not "available" until the
+ * earlier one is consumed) so a test can prove the orchestrator exposed an
+ * earlier event *before* a later one existed — i.e. streamed live instead of
+ * buffering the whole round first.
+ */
+function liveSseStream(
+  events: Array<string | Record<string, unknown>>,
+): { stream: ReadableStream<Uint8Array>; enqueued: (index: number) => boolean } {
+  const flags = new Array(events.length).fill(false);
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseLine(events[index]));
+      flags[index] = true;
+      index++;
+    },
+    pull(controller) {
+      if (index < events.length) {
+        controller.enqueue(sseLine(events[index]));
+        flags[index] = true;
+        index++;
+      } else {
+        controller.close();
+      }
+    },
+  });
+  return { stream, enqueued: (i: number) => flags[i] };
+}
+
+/** A recording client that hands each round a pull-based (live) SSE stream and
+ * exposes, per round, an `enqueued(index)` predicate (see {@link liveSseStream}). */
+function createLiveRecordingClient(
+  rounds: Array<Array<string | Record<string, unknown>>>,
+): {
+  client: ProviderClient;
+  calls: RecordedCall[];
+  enqueued: Array<(index: number) => boolean>;
+} {
+  const calls: RecordedCall[] = [];
+  const enqueued: Array<(index: number) => boolean> = [];
+  let round = 0;
+  const client = {
+    chat: vi.fn(),
+    chatStream: vi.fn((_config: ProviderConfig, _messages: unknown, _options?: unknown) => {
+      calls.push({ config: _config, messages: _messages, options: _options });
+      const built = liveSseStream(rounds[round++] ?? []);
+      enqueued.push(built.enqueued);
+      return built.stream;
+    }),
+  } as unknown as ProviderClient;
+
+  return { client, calls, enqueued };
 }
 
 /** A registry that resolves a single (or none) tool by name. */
@@ -249,12 +314,12 @@ const TOOL_CALL_EVENTS = [
     "[DONE]",
 ];
 
-describe("ChatOrchestrator — valid single tool call", () => {
-  it("executes the tool once, then streams round 2 with no tools", async () => {
+describe("ChatOrchestrator — valid tool call execution", () => {
+  it("executes one tool, then flushes the buffered plain-text answer from the next tool-enabled round", async () => {
     const tool = createTool("web_search", "Search results: ...");
     const { client, calls } = createRecordingClient([
       ...TOOL_CALL_EVENTS,
-      // Round 2: the final answer.
+      // The next tool-enabled round: the final answer.
       { choices: [{ delta: { content: "The weather is sunny." } }] },
       { choices: [{ delta: {}, finish_reason: "stop" }] },
       "[DONE]",
@@ -268,8 +333,9 @@ describe("ChatOrchestrator — valid single tool call", () => {
       }),
     );
 
-    // The pre-tool filler text is discarded; only round 2 text is visible. The
-    // tool lifecycle is exposed as structured events before the final answer.
+    // The pre-tool filler text is discarded; only the buffered plain-text
+    // answer is visible. The tool lifecycle is exposed as structured events
+    // before the final answer.
     expect(events).toEqual([
       { type: "tool_start", name: "web_search" },
       { type: "tool_end", name: "web_search" },
@@ -282,13 +348,15 @@ describe("ChatOrchestrator — valid single tool call", () => {
     expect(tool.execute).toHaveBeenCalledTimes(1);
     expect(tool.execute).toHaveBeenCalledWith({ query: "weather" }, { signal: undefined });
 
-    // Round 1 attached tools; round 2 omitted them.
+    // Both rounds carry tools. A tool-enabled round that returns plain text
+    // flushes its buffered text as the final answer, so only the forced
+    // no-tools final round (after the execution cap) omits tools.
     expect(calls.length).toBe(2);
     expect((calls[0].options as { tools?: unknown }).tools).toHaveLength(1);
-    expect((calls[1].options as { tools?: unknown }).tools).toBeUndefined();
+    expect((calls[1].options as { tools?: unknown }).tools).toHaveLength(1);
 
-    // Round-2 request carries the internal assistant tool-call + tool-result
-    // messages after the original user message.
+    // The tool-enabled round carries the internal assistant tool-call +
+    // tool-result messages after the original user message.
     const round2 = calls[1].messages as Array<{ role: string; [key: string]: unknown }>;
     expect(round2).toHaveLength(3);
     expect(round2[0]).toMatchObject({ role: "user", content: "what is the weather" });
@@ -369,7 +437,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps block 1 and drops block 2 entirely.
+    // The following round's content keeps block 1 and drops block 2 entirely.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
     expect(toolResult?.content).toContain("[1]\nTitle: First");
@@ -424,7 +492,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps source 1's block (with its inline "[2]\nTitle:") and
+    // The following round's content keeps source 1's block (with its inline "[2]\nTitle:") and
     // drops source 2's real block, so source 2 is never attributed.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
@@ -483,7 +551,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps source 1's whole block (including the embedded
+    // The following round's content keeps source 1's whole block (including the embedded
     // blank-line "[2]\nTitle:" paragraph) and drops source 2's real block.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
@@ -506,7 +574,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
     );
     const { client, calls } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
 
-    // A context window far too small for the round-2 overhead leaves no room
+    // A context window far too small for the round overhead leaves no room
     // for the web content, so nothing is delivered to the model.
     const events = await collect(
       new ChatOrchestrator(client).stream({
@@ -690,16 +758,17 @@ describe("ChatOrchestrator — invalid tool calls", () => {
     ).rejects.toMatchObject({ code: "TOOL_CALL_LIMIT_EXCEEDED", statusCode: 502 });
   });
 
-  it("rejects a second tool request from round 2 with TOOL_CALL_LIMIT_EXCEEDED", async () => {
-    const { client } = createRecordingClient([
-      ...TOOL_CALL_EVENTS,
-      // Round 2: model tries to call the tool again (should not be allowed).
+  it("rejects a tool call after the execution cap with TOOL_CALL_LIMIT_EXCEEDED", async () => {
+    // Three tool rounds execute (the per-turn cap); the fourth round is sent
+    // without tool definitions, so a tool call there is rejected — never
+    // executed — via the existing safe error path. No fifth round starts.
+    const toolRound = (id: string) => [
       {
         choices: [
           {
             delta: {
               tool_calls: [
-                { index: 0, id: "call_2", type: "function", function: { name: "web_search", arguments: "{}" } },
+                { index: 0, id, type: "function", function: { name: "web_search", arguments: "{}" } },
               ],
             },
           },
@@ -707,6 +776,12 @@ describe("ChatOrchestrator — invalid tool calls", () => {
       },
       { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
       "[DONE]",
+    ];
+    const { client, calls } = createRecordingClient([
+      ...toolRound("call_1"),
+      ...toolRound("call_2"),
+      ...toolRound("call_3"),
+      ...toolRound("call_4"),
     ]);
 
     await expect(
@@ -718,6 +793,10 @@ describe("ChatOrchestrator — invalid tool calls", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "TOOL_CALL_LIMIT_EXCEEDED", statusCode: 502 });
+
+    // Three tool rounds ran with tools; the fourth ran without them.
+    expect(calls.length).toBe(4);
+    expect((calls[3].options as { tools?: unknown }).tools).toBeUndefined();
   });
 });
 
@@ -783,7 +862,7 @@ describe("ChatOrchestrator — tool lifecycle events", () => {
       }),
     );
 
-    // tool events precede the round-2 streaming answer.
+    // tool events precede the buffered plain-text answer.
     expect(events).toEqual([
       { type: "tool_start", name: "web_search" },
       { type: "tool_end", name: "web_search" },
@@ -889,12 +968,12 @@ describe("ChatOrchestrator — cancellation", () => {
     expect(client.chatStream).toHaveBeenCalledTimes(1);
   });
 
-  it("does not start round 2 when aborted after round 1", async () => {
-    // Abort inside the tool execution: round 1 completes, the tool runs, but
-    // the post-tool guard must prevent round 2 from starting. tool_start was
-    // already emitted (the search had begun) before the abort, so the stream
-    // ends silently with just that one event — no tool_end, no sources, no
-    // error, no round 2.
+  it("does not start the next model round after the tool round when aborted", async () => {
+    // Abort inside the tool execution: the tool round completes and the tool
+    // runs, but the post-tool guard must prevent the next model round from
+    // starting. tool_start was already emitted (the search had begun) before
+    // the abort, so the stream ends silently with just that one event — no
+    // tool_end, no sources, no error.
     const controller = new AbortController();
     const tool = createTool("web_search", "result", async () => {
       controller.abort();
@@ -913,7 +992,7 @@ describe("ChatOrchestrator — cancellation", () => {
 
     expect(events).toEqual([{ type: "tool_start", name: "web_search" }]);
     expect(tool.execute).toHaveBeenCalledTimes(1);
-    // Only round 1 was issued; no round-2 request.
+    // Only the tool round was issued; no request for the next model round.
     expect(calls.length).toBe(1);
   });
 });
@@ -1001,5 +1080,241 @@ describe("ChatOrchestrator — provider parse error", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "INVALID_PROVIDER_RESPONSE" });
+  });
+});
+
+// ── Bounded multi-step tool loop ──────────────────────────────────────────────
+
+describe("ChatOrchestrator — bounded multi-step tool loop", () => {
+  const toolCallRound = (id: string, name = "web_search", args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text = "final") => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  it("executes two sequential tools then streams the final answer", async () => {
+    const tool = createTool("web_search", "result 2");
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "done" },
+      { type: "done" },
+    ]);
+
+    // Three model rounds: two tool rounds + a final plain-text round that still
+    // carries tool definitions (only the no-tools fourth round omits them).
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the fourth round without tool definitions after three executions", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...toolCallRound("call_3"),
+      ...plainAnswer("answer"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "answer" },
+      { type: "done" },
+    ]);
+
+    // Three tool rounds carried tools; the final round carries none.
+    expect(calls.length).toBe(4);
+    expect((calls[0].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[1].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[2].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[3].options as { tools?: unknown }).tools).toBeUndefined();
+  });
+
+  it("never issues more than four model rounds in the three-tool happy path", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...toolCallRound("call_3"),
+      ...plainAnswer("answer"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    // Three tool rounds execute; the fourth is the forced no-tools round.
+    expect(calls.length).toBe(4);
+  });
+
+  it("streams the forced no-tools final round live, not buffered", async () => {
+    // Three tool rounds exhaust the cap; the fourth round runs with no tools and
+    // must stream live. With a pull-based provider stream, the round's `done`
+    // event (index 2 of plainAnswer) is not "available" until the consumer has
+    // drained the earlier deltas. If the orchestrator streamed live, that `done`
+    // does not exist when the very first delta is exposed; if it buffered the
+    // whole round first, `done` would already be enqueued.
+    const rounds = [
+      toolCallRound("call_1"),
+      toolCallRound("call_2"),
+      toolCallRound("call_3"),
+      plainAnswer("final"),
+    ];
+    const { client, enqueued } = createLiveRecordingClient(rounds);
+
+    const events: Array<{ type: string; text?: string }> = [];
+    let firstDeltaSeenBeforeDone = false;
+    let firstDeltaSeen = false;
+    for await (const event of new ChatOrchestrator(client).stream({
+      providerConfig: CONFIG,
+      messages: [userMessage("x")],
+      tools: createRegistry(createTool("web_search", "result")),
+    })) {
+      events.push(event);
+      if (event.type === "delta" && !firstDeltaSeen) {
+        firstDeltaSeen = true;
+        // plainAnswer's `done` is at index 2.
+        firstDeltaSeenBeforeDone = !enqueued[3](2);
+      }
+    }
+
+    // The core regression guard: the first delta was exposed before the round
+    // had fully completed (its `done` did not yet exist) — i.e. progressive.
+    expect(firstDeltaSeenBeforeDone).toBe(true);
+    // The final answer was still delivered in full.
+    expect(events).toContainEqual({ type: "delta", text: "final" });
+    expect(events).toContainEqual({ type: "done" });
+  });
+
+  it("keeps prior assistant tool calls and tool results in order across rounds", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...plainAnswer("final"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    const round3 = calls[2].messages as Array<{ role: string; [key: string]: unknown }>;
+    // user + assistant(tool call 1) + tool(1) + assistant(tool call 2) + tool(2)
+    expect(round3).toHaveLength(5);
+    expect(round3[0]).toMatchObject({ role: "user", content: "x" });
+    expect(round3[1]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "web_search" } }],
+    });
+    expect(round3[2]).toMatchObject({ role: "tool", tool_call_id: "call_1" });
+    expect(round3[3]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{ id: "call_2", type: "function", function: { name: "web_search" } }],
+    });
+    expect(round3[4]).toMatchObject({ role: "tool", tool_call_id: "call_2" });
+  });
+
+  it("preserves tool-call IDs across multiple sequential tools", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_alpha"),
+      ...toolCallRound("call_beta"),
+      ...plainAnswer("final"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    // workingMessages accumulates in place, so round N's recorded messages carry
+    // every prior round's assistant tool-call + tool result as well as the new
+    // round's own. Assert the newest call lands at the tail and all IDs are kept.
+    const round2 = calls[1].messages as Array<{ [key: string]: unknown }>;
+    const round3 = calls[2].messages as Array<{ [key: string]: unknown }>;
+    expect((round2[1] as { tool_calls: Array<{ id: string }> }).tool_calls[0].id).toBe(
+      "call_alpha",
+    );
+    expect((round2[2] as { tool_call_id: string }).tool_call_id).toBe("call_alpha");
+    expect((round3[3] as { tool_calls: Array<{ id: string }> }).tool_calls[0].id).toBe(
+      "call_beta",
+    );
+    expect((round3[4] as { tool_call_id: string }).tool_call_id).toBe("call_beta");
+  });
+
+  it("emits the final deltas exactly once without duplicating buffered text", async () => {
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search", "{}"),
+      ...plainAnswer("only-once"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "delta")).toEqual([
+      { type: "delta", text: "only-once" },
+    ]);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
   });
 });

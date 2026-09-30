@@ -27,13 +27,26 @@ import {
 // only depends on the generic {@link ToolRegistry}, the provider client, the
 // context-budget helpers and the shared cancellation signal.
 //
-// Phase-2 hard limits:
-//   - max tool calls per user turn = 1 (parallel calls unsupported);
-//   - max model rounds = 2 (a second tool request is rejected, never retried).
+// Sequential, bounded multi-step loop:
+//   - at most MAX_TOOL_EXECUTIONS_PER_TURN executed tools per user turn;
+//   - the final answer may be a fourth model round, sent without tools;
+//   - at most MAX_MODEL_ROUNDS model rounds per turn;
+//   - at most one tool call accepted per model round (parallel calls unsupported).
 //
-// The orchestrator is intentionally decoupled from the HTTP layer and from any
-// tool configuration: callers inject an already-configured registry. Step 31
-// owns wiring it into `/api/chat/stream`.
+// The loop is bounded by MAX_MODEL_ROUNDS on every iteration, so a fifth round
+// is structurally impossible. The orchestrator is intentionally decoupled from
+// the HTTP layer and from any tool configuration: callers inject an
+// already-configured registry. Step 31 owns wiring it into `/api/chat/stream`.
+//
+// NOTE (temporary, step 42): tool results are budgeted per-execution against
+// the full input budget. Step 42 makes the budget generic across multiple
+// accumulated results.
+
+/** Maximum number of model rounds in a single user turn (tools + final answer). */
+export const MAX_MODEL_ROUNDS = 4;
+
+/** Maximum number of executed tools in a single user turn. */
+export const MAX_TOOL_EXECUTIONS_PER_TURN = 3;
 
 /**
  * Input for a single orchestrated chat turn.
@@ -74,6 +87,7 @@ type RoundOutcome =
   | { status: "cancelled" }
   | { status: "done"; textDeltas: string[] }
   | { status: "tool_calls"; toolCalls: AccumulatedToolCall[] };
+
 
 function sanitizeSseData(text: string): string {
   return text.replace(/\u0000/g, "");
@@ -118,7 +132,7 @@ function toStructuredSources(value: unknown): WebSearchSource[] {
 }
 
 /**
- * Which source IDs actually entered the model's round-2 context.
+ * Which source IDs actually entered the model's context.
  *
  * The full web content is the untrusted marker followed by one exact
  * `[id]`-prefixed block per source (see webSearchFormat), joined by a blank
@@ -161,6 +175,20 @@ export class ChatOrchestrator {
 
   /**
    * Run one orchestrated turn, yielding the visible assistant stream.
+   *
+   * When tools are registered this drives a bounded, sequential multi-step
+   * loop (see {@link MAX_MODEL_ROUNDS} / {@link MAX_TOOL_EXECUTIONS_PER_TURN}):
+   *
+   * ```text
+   * round 1 [tools] --tool--> execute ->
+   * round 2 [tools] --tool--> execute ->
+   * round 3 [tools] --tool--> execute ->
+   * round 4 [no tools] ------> final streamed answer
+   * ```
+   *
+   * A turn finishes early when a tool-enabled round returns ordinary assistant
+   * text instead of another tool call. At most one tool call is accepted per
+   * model round; parallel tool calls are unsupported in v1.2.0.
    */
   async *stream(input: ChatOrchestrationInput): AsyncGenerator<ChatOrchestrationEvent> {
     const definitions = input.tools?.listDefinitions() ?? [];
@@ -176,45 +204,104 @@ export class ChatOrchestrator {
       return;
     }
 
-    // Round 1 with tools: buffer first-round text until the tool choice is
-    // resolved (the model may emit filler text such as "I'll search for that…"
-    // before requesting a tool, which must not reach the user).
-    const round1 = await this.runModelRound({
-      providerConfig: input.providerConfig,
-      messages: input.messages,
-      signal: input.signal,
-      tools: definitions,
-      toolChoice: "auto",
+    // Working copy of the conversation. Tool-call / tool-result messages are
+    // appended in place as each tool executes, preserving the OpenAI-compatible
+    // tool-call history across every round.
+    const workingMessages: ProviderRequestMessage[] = [...input.messages];
+
+    // Two independent counters, kept separate for legibility and so step 41 can
+    // extend their semantics without re-deriving one from the other.
+    let modelRoundCount = 0;
+    let toolExecutionCount = 0;
+    // Tools stay available until the execution cap is reached; after that the
+    // final round is sent without tool definitions.
+    let toolsAvailable = true;
+
+    // The loop is bounded by MAX_MODEL_ROUNDS on every iteration, so a fifth
+    // round is structurally impossible regardless of how the control flow
+    // branches below.
+    while (modelRoundCount < MAX_MODEL_ROUNDS) {
+      modelRoundCount++;
+
+      // Once the execution cap is reached, the final round runs with no tools.
+      // Stream it live (progressive) instead of buffering: the model can no
+      // longer execute a tool, so there is no filler to discard. `streamRoundLive`
+      // also rejects a stray tool call here via TOOL_CALL_LIMIT_EXCEEDED, so a
+      // tool-enabled round that returns plain text is never mistaken for this
+      // final live answer.
+      if (!toolsAvailable) {
+        yield* this.streamRoundLive({
+          providerConfig: input.providerConfig,
+          messages: workingMessages,
+          signal: input.signal,
+        });
+        return;
+      }
+
+      const round = await this.runModelRound({
+        providerConfig: input.providerConfig,
+        messages: workingMessages,
+        signal: input.signal,
+        tools: definitions,
+        toolChoice: "auto",
+      });
+
+      if (round.status === "cancelled") {
+        // Cancellation is silent: no error, no further round.
+        return;
+      }
+
+      if (round.status === "done") {
+        // A tool-enabled round that returned plain text flushes its already
+        // buffered text as the final answer, as a single
+        // delta/done sequence. Progressive live streaming is reserved for the
+        // forced no-tools final round (handled above).
+        for (const delta of round.textDeltas) {
+          yield { type: "delta", text: sanitizeSseData(delta) };
+        }
+        yield { type: "done" };
+        return;
+      }
+
+      // round.status === "tool_calls": execute one tool, then loop.
+      yield* this.executeToolRound(input, workingMessages, round.toolCalls);
+
+      // Cancellation during/just after execution: stop before the next round,
+      // silently, matching the pre-existing cancellation semantics.
+      if (input.signal?.aborted) {
+        return;
+      }
+
+      toolExecutionCount++;
+      if (toolExecutionCount >= MAX_TOOL_EXECUTIONS_PER_TURN) {
+        toolsAvailable = false;
+      }
+    }
+
+    // Defensive: the loop can only exit by answering (done) or throwing, so
+    // this is unreachable in practice. Guard it explicitly so an impossible
+    // state fails loudly instead of ending the turn with no answer.
+    throw new AppError({
+      code: "TOOL_CALL_LIMIT_EXCEEDED",
+      statusCode: 502,
+      message: "The model exceeded the allowed number of tool rounds without producing an answer.",
     });
-
-    if (round1.status === "cancelled") {
-      // Cancellation is silent: no error, no second round.
-      return;
-    }
-
-    if (round1.status === "tool_calls") {
-      // Execute exactly one tool, then stream the final answer from round 2.
-      yield* this.executeToolAndStreamFinal(input, round1.toolCalls);
-      return;
-    }
-
-    // Normal first-round completion: flush the buffered text as the final answer.
-    for (const delta of round1.textDeltas) {
-      yield { type: "delta", text: sanitizeSseData(delta) };
-    }
-    yield { type: "done" };
   }
 
   /**
-   * Round 1 outcome resolved into a tool execution + round 2 stream.
+   * Resolve, validate and execute a single tool call from one buffered model
+   * round, appending the provider-compatible assistant tool-call and
+   * `role: "tool"` result messages to `workingMessages`, and yielding the
+   * `tool_start` / `tool_end` / `sources` lifecycle events in order.
    *
-   * Validates the accumulated tool call, parses its arguments only after the
-   * call is complete, executes the tool once, builds the internal assistant
-   * tool-call / tool-result messages (budgeting the web result against the
-   * context window), and streams round 2 with no tools attached.
+   * The tool-result body is budgeted against the context window exactly as in
+   * the pre-existing path (see {@link buildToolResultMessages});
+   * this is intentionally per-result and does not yet aggregate budgets across
+   * multiple accumulated results (step 42 owns that).
    */
-  private async *executeToolAndStreamFinal(
+  private async *executeToolRound(
     input: ChatOrchestrationInput,
+    workingMessages: ProviderRequestMessage[],
     toolCalls: AccumulatedToolCall[],
   ): AsyncGenerator<ChatOrchestrationEvent> {
     const { tool, call } = validateToolCalls(toolCalls, input.tools);
@@ -256,7 +343,7 @@ export class ChatOrchestrator {
     try {
       result = await tool.execute(args, { signal: input.signal });
     } catch (error) {
-      // Cancellation during execution: no second round, silent.
+      // Cancellation during execution: no further round, silent.
       if (input.signal?.aborted) {
         return;
       }
@@ -276,50 +363,59 @@ export class ChatOrchestrator {
       throw mapped;
     }
 
-    // Cancellation after the tool completed but before round 2: do not start it.
+    // Cancellation after the tool completed but before the next round: do not
+    // start it.
     if (input.signal?.aborted) {
       return;
     }
 
-    // Success: emit the tool lifecycle tail before the final answer. Emit only
-    // the sources whose blocks actually entered the model's round-2 context
-    // (see `includedSourceIds`): the tool-result content is budgeted and may be
-    // truncated, so a source emitted to the UI but never sent to the model must
-    // not be surfaced.
+    // Append the internal assistant tool-call / tool-result messages to the
+    // working list (budgeting the tool-result body against the context window).
+    const { assistantMessage, toolResultMessage, delivered } =
+      await this.buildToolResultMessages(
+        workingMessages,
+        call,
+        result,
+        input.contextSizeTokens,
+      );
+    workingMessages.push(assistantMessage, toolResultMessage);
+
+    // Emit the tool lifecycle tail: only the sources whose blocks actually
+    // entered the model's context (see {@link buildToolResultMessages}), so a
+    // source emitted to the UI but never sent to the model is not surfaced.
     const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    const { messages: round2Messages, delivered } = await this.buildRound2Messages(
-      input,
-      call,
-      result,
-    );
     const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
     yield { type: "tool_end", name: tool.definition.name };
     yield { type: "sources", sources: deliveredSources };
-
-    yield* this.streamRoundLive({
-      providerConfig: input.providerConfig,
-      messages: round2Messages,
-      signal: input.signal,
-    });
   }
 
   /**
-   * Build the round-2 request: the original conversation followed by the two
-   * internal orchestration messages. The tool-result content is budgeted
-   * against the context window and truncated if needed; the current user
-   * message is never displaced.
+   * Build the internal assistant tool-call and `role: "tool"` messages that
+   * follow the given base messages, budgeting the tool-result content against
+   * the context window and truncating if needed. The base conversation (which
+   * already contains every prior round's tool interactions) is never displaced;
+   * only the tool-result *body* is the thing budgeted/shrunk.
+   *
+   * Reused for every tool execution in the multi-step loop (step 40); step 42
+   * will make the budget generic across multiple accumulated results.
    */
-  private async buildRound2Messages(
-    input: ChatOrchestrationInput,
+  private async buildToolResultMessages(
+    baseMessages: ProviderRequestMessage[],
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
-  ): Promise<{ messages: ProviderRequestMessage[]; delivered: Set<number> }> {
+    contextSizeTokens?: number,
+  ): Promise<{ assistantMessage: ProviderRequestMessage; toolResultMessage: ProviderRequestMessage; delivered: Set<number> }> {
     const webContent = result.content;
 
-    // Fixed round-2 content: the original conversation plus the overhead of the
-    // two internal messages. The tool-result *body* is deliberately excluded so
-    // it is the only thing budgeted/shrunk.
-    const conversationText = input.messages.map((message) => message.content).join("\n");
+    // Fixed content: the base conversation (all prior rounds) plus the overhead
+    // of the two internal messages. The tool-result *body* is deliberately
+    // excluded so it is the only thing budgeted/shrunk.
+    // Only messages that carry `content` contribute to the conversation text;
+    // the assistant tool-call message (no `content`) is excluded from this
+    // token estimate — its overhead is accounted for separately below.
+    const conversationText = baseMessages
+      .map((message) => ("content" in message ? message.content : ""))
+      .join("\n");
     const assistantToolCallText = JSON.stringify({
       role: "assistant",
       tool_calls: [
@@ -335,14 +431,14 @@ export class ChatOrchestrator {
     // full web result. Only when `contextSizeTokens` is provided is the result
     // budgeted and possibly truncated.
     const budget =
-      input.contextSizeTokens === undefined
+      contextSizeTokens === undefined
         ? {
             includedWebCharacters: webContent.length,
             originalWebCharacters: webContent.length,
             truncated: false,
           }
         : calculateToolResultBudget({
-            maxTokens: input.contextSizeTokens,
+            maxTokens: contextSizeTokens,
             messageTokens,
             webResultCharacters: webContent.length,
           });
@@ -351,16 +447,15 @@ export class ChatOrchestrator {
       : webContent;
 
     // Report only the sources whose blocks are actually present in the (possibly
-    // truncated) content sent to the model, so the emitted `sources` event and
-    // `tool_end.resultCount` stay consistent with the delivered content. The set
-    // is derived from complete block boundaries, not from a substring search of
-    // the (untrusted) body.
+    // truncated) content sent to the model, so the emitted `sources` event stays
+    // consistent with the delivered content. The set is derived from complete
+    // block boundaries, not from a substring search of the (untrusted) body.
     const structuredSources = webContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
       ? toStructuredSources(result.metadata?.sources)
       : [];
     const delivered = deliveredSourceIds(structuredSources, toolResultContent);
 
-    const assistantToolCallMessage: ProviderRequestMessage = {
+    const assistantMessage: ProviderRequestMessage = {
       role: "assistant",
       tool_calls: [
         {
@@ -377,7 +472,8 @@ export class ChatOrchestrator {
     };
 
     return {
-      messages: [...input.messages, assistantToolCallMessage, toolResultMessage],
+      assistantMessage,
+      toolResultMessage,
       delivered,
     };
   }
@@ -450,9 +546,14 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Stream a model round live, forwarding deltas and the final `done` to the
-   * caller. Used for the no-tools pass-through path and for round 2 (the final
-   * visible answer), where no buffering is required.
+   * Stream a model round progressively, forwarding deltas and the final `done`
+   * to the caller, with no buffering.
+   *
+   * Used for:
+   *   - a normal no-tools pass-through;
+   *   - the forced final no-tools round after the tool-execution cap is reached.
+   *
+   * Unexpected tool calls are rejected through the existing safe error path.
    */
   private async *streamRoundLive(opts: {
     providerConfig: ProviderConfig;
@@ -477,9 +578,10 @@ export class ChatOrchestrator {
         if (event.type === "delta") {
           yield { type: "delta", text: sanitizeSseData(event.text) };
         } else if (event.type === "tool_calls") {
-          // This round runs with no tools attached (no-tools pass-through or
-          // round 2). Any tool call is a protocol violation — a provider trying
-          // to open a second tool round — and is rejected rather than ignored.
+          // This round runs with no tools attached (a normal no-tools
+          // pass-through or the forced final no-tools round). Any tool call is a
+          // protocol violation — a provider trying to open another tool round —
+          // and is rejected rather than ignored.
           throw new AppError({
             code: "TOOL_CALL_LIMIT_EXCEEDED",
             statusCode: 502,
