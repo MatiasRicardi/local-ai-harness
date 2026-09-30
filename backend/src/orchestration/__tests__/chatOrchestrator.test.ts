@@ -17,13 +17,17 @@ const WEB_SEARCH_MARKER =
  * real SSE parser can consume. A payload is either the `[DONE]` marker string
  * or an OpenAI-style streaming JSON object.
  */
-function sseStream(events: Array<string | Record<string, unknown>>): ReadableStream<Uint8Array> {
+function sseLine(event: string | Record<string, unknown>): Uint8Array {
   const encoder = new TextEncoder();
+  const line = typeof event === "string" ? event : JSON.stringify(event);
+  return encoder.encode(`data: ${line}\n\n`);
+}
+
+function sseStream(events: Array<string | Record<string, unknown>>): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const event of events) {
-        const line = typeof event === "string" ? event : JSON.stringify(event);
-        controller.enqueue(encoder.encode(`data: ${line}\n\n`));
+        controller.enqueue(sseLine(event));
       }
       controller.close();
     },
@@ -72,6 +76,67 @@ function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   } as unknown as ProviderClient;
 
   return { client, calls };
+}
+
+/**
+ * Build a **pull-based** SSE stream: the first payload is enqueued immediately
+ * and each later payload only after the previous chunk has been read (the
+ * `ReadableStream` default high-water mark is 1, so `pull` runs one chunk at a
+ * time). `enqueued(index)` reports whether the payload at `index` already exists
+ * in the stream — true only once the consumer has drained everything before it.
+ *
+ * This models a live provider (a later event is not "available" until the
+ * earlier one is consumed) so a test can prove the orchestrator exposed an
+ * earlier event *before* a later one existed — i.e. streamed live instead of
+ * buffering the whole round first.
+ */
+function liveSseStream(
+  events: Array<string | Record<string, unknown>>,
+): { stream: ReadableStream<Uint8Array>; enqueued: (index: number) => boolean } {
+  const flags = new Array(events.length).fill(false);
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseLine(events[index]));
+      flags[index] = true;
+      index++;
+    },
+    pull(controller) {
+      if (index < events.length) {
+        controller.enqueue(sseLine(events[index]));
+        flags[index] = true;
+        index++;
+      } else {
+        controller.close();
+      }
+    },
+  });
+  return { stream, enqueued: (i: number) => flags[i] };
+}
+
+/** A recording client that hands each round a pull-based (live) SSE stream and
+ * exposes, per round, an `enqueued(index)` predicate (see {@link liveSseStream}). */
+function createLiveRecordingClient(
+  rounds: Array<Array<string | Record<string, unknown>>>,
+): {
+  client: ProviderClient;
+  calls: RecordedCall[];
+  enqueued: Array<(index: number) => boolean>;
+} {
+  const calls: RecordedCall[] = [];
+  const enqueued: Array<(index: number) => boolean> = [];
+  let round = 0;
+  const client = {
+    chat: vi.fn(),
+    chatStream: vi.fn((_config: ProviderConfig, _messages: unknown, _options?: unknown) => {
+      calls.push({ config: _config, messages: _messages, options: _options });
+      const built = liveSseStream(rounds[round++] ?? []);
+      enqueued.push(built.enqueued);
+      return built.stream;
+    }),
+  } as unknown as ProviderClient;
+
+  return { client, calls, enqueued };
 }
 
 /** A registry that resolves a single (or none) tool by name. */
@@ -1130,6 +1195,45 @@ describe("ChatOrchestrator — bounded multi-step tool loop", () => {
 
     // Three tool rounds execute; the fourth is the forced no-tools round.
     expect(calls.length).toBe(4);
+  });
+
+  it("streams the forced no-tools final round live, not buffered", async () => {
+    // Three tool rounds exhaust the cap; the fourth round runs with no tools and
+    // must stream live. With a pull-based provider stream, the round's `done`
+    // event (index 2 of plainAnswer) is not "available" until the consumer has
+    // drained the earlier deltas. If the orchestrator streamed live, that `done`
+    // does not exist when the very first delta is exposed; if it buffered the
+    // whole round first, `done` would already be enqueued.
+    const rounds = [
+      toolCallRound("call_1"),
+      toolCallRound("call_2"),
+      toolCallRound("call_3"),
+      plainAnswer("final"),
+    ];
+    const { client, enqueued } = createLiveRecordingClient(rounds);
+
+    const events: Array<{ type: string; text?: string }> = [];
+    let firstDeltaSeenBeforeDone = false;
+    let firstDeltaSeen = false;
+    for await (const event of new ChatOrchestrator(client).stream({
+      providerConfig: CONFIG,
+      messages: [userMessage("x")],
+      tools: createRegistry(createTool("web_search", "result")),
+    })) {
+      events.push(event);
+      if (event.type === "delta" && !firstDeltaSeen) {
+        firstDeltaSeen = true;
+        // plainAnswer's `done` is at index 2.
+        firstDeltaSeenBeforeDone = !enqueued[3](2);
+      }
+    }
+
+    // The core regression guard: the first delta was exposed before the round
+    // had fully completed (its `done` did not yet exist) — i.e. progressive.
+    expect(firstDeltaSeenBeforeDone).toBe(true);
+    // The final answer was still delivered in full.
+    expect(events).toContainEqual({ type: "delta", text: "final" });
+    expect(events).toContainEqual({ type: "done" });
   });
 
   it("keeps prior assistant tool calls and tool results in order across rounds", async () => {

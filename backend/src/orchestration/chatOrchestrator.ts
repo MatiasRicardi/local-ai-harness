@@ -223,12 +223,26 @@ export class ChatOrchestrator {
     while (modelRoundCount < MAX_MODEL_ROUNDS) {
       modelRoundCount++;
 
+      // Once the execution cap is reached, the final round runs with no tools.
+      // Stream it live (progressive) instead of buffering: the model can no
+      // longer execute a tool, so there is no filler to discard. `streamRoundLive`
+      // also rejects a stray tool call here via TOOL_CALL_LIMIT_EXCEEDED, so a
+      // tool-enabled round that returns plain text is never mistaken for this
+      // final live answer.
+      if (!toolsAvailable) {
+        yield* this.streamRoundLive({
+          providerConfig: input.providerConfig,
+          messages: workingMessages,
+          signal: input.signal,
+        });
+        return;
+      }
+
       const round = await this.runModelRound({
         providerConfig: input.providerConfig,
         messages: workingMessages,
         signal: input.signal,
-        // The final round (after the execution cap) carries no tool definitions.
-        tools: toolsAvailable ? definitions : undefined,
+        tools: definitions,
         toolChoice: "auto",
       });
 
@@ -239,11 +253,9 @@ export class ChatOrchestrator {
 
       if (round.status === "done") {
         // A tool-enabled round that returned plain text flushes its already
-        // buffered text as the final answer. The no-tools final round streams
-        // live here (runModelRound buffers, but this branch is reached only
-        // after a tool round, so the buffered text is the tool round's filler
-        // — handled below). The true final streamed answer comes from the
-        // no-tools round, which is buffered too; flush it here.
+        // buffered text as the final answer, as a single
+        // delta/done sequence. Progressive live streaming is reserved for the
+        // forced no-tools final round (handled above).
         for (const delta of round.textDeltas) {
           yield { type: "delta", text: sanitizeSseData(delta) };
         }
@@ -251,20 +263,7 @@ export class ChatOrchestrator {
         return;
       }
 
-      // round.status === "tool_calls"
-      if (!toolsAvailable) {
-        // The tool cap was already reached: this no-tools round must not open
-        // another tool round. Fail via the existing safe error path — the call
-        // is never executed and no fifth round starts.
-        throw new AppError({
-          code: "TOOL_CALL_LIMIT_EXCEEDED",
-          statusCode: 502,
-          message: "The model returned a tool call when no tools were available.",
-        });
-      }
-
-      // Execute exactly one tool, appending its assistant/tool messages to the
-      // working list and emitting its lifecycle events.
+      // round.status === "tool_calls": execute one tool, then loop.
       yield* this.executeToolRound(input, workingMessages, round.toolCalls);
 
       // Cancellation during/just after execution: stop before the next round,
