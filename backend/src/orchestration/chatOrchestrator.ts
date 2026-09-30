@@ -209,10 +209,16 @@ export class ChatOrchestrator {
     // tool-call history across every round.
     const workingMessages: ProviderRequestMessage[] = [...input.messages];
 
-    // Two independent counters, kept separate for legibility and so step 41 can
-    // extend their semantics without re-deriving one from the other.
+    // Two independent counters. `modelRoundCount` bounds the number of model
+    // rounds; `toolExecutionCount` bounds the number of executed tools in the
+    // turn. Both are request-local and never persist beyond this turn.
     let modelRoundCount = 0;
     let toolExecutionCount = 0;
+    // Per-tool execution attempts actually started this turn, keyed by tool
+    // name. Incremented immediately before each real `tool.execute` so a
+    // failing tool still consumes its quota (step 41). Request-local: it lives
+    // only on this invocation and resets to empty for every turn.
+    const executionsByTool = new Map<string, number>();
     // Tools stay available until the execution cap is reached; after that the
     // final round is sent without tool definitions.
     let toolsAvailable = true;
@@ -263,8 +269,21 @@ export class ChatOrchestrator {
         return;
       }
 
-      // round.status === "tool_calls": execute one tool, then loop.
-      yield* this.executeToolRound(input, workingMessages, round.toolCalls);
+      // round.status === "tool_calls": resolve, validate, and execute (or
+      // block) one tool call, then loop. `executeToolRound` returns `true` when
+      // the requested tool was blocked by its per-turn execution policy: no
+      // tool executed and no lifecycle event emitted, so the loop closes the
+      // call with a synthetic result and takes the final no-tools round.
+      const toolBlockedByPolicy = yield* this.executeToolRound(
+        input,
+        workingMessages,
+        round.toolCalls,
+        executionsByTool,
+      );
+      if (toolBlockedByPolicy) {
+        toolsAvailable = false;
+        continue;
+      }
 
       // Cancellation during/just after execution: stop before the next round,
       // silently, matching the pre-existing cancellation semantics.
@@ -289,10 +308,18 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Resolve, validate and execute a single tool call from one buffered model
-   * round, appending the provider-compatible assistant tool-call and
-   * `role: "tool"` result messages to `workingMessages`, and yielding the
+   * Resolve, validate and execute (or block) a single tool call from one
+   * buffered model round, appending the provider-compatible assistant tool-call
+   * and `role: "tool"` result messages to `workingMessages`, and yielding the
    * `tool_start` / `tool_end` / `sources` lifecycle events in order.
+   *
+   * When the tool's per-turn execution limit is already reached the call is
+   * blocked instead of executed: no lifecycle events are emitted, a synthetic
+   * `role: "tool"` result is appended to close the call, and the generator
+   * returns `true` so the caller disables tools for the rest of the turn.
+   *
+   * Returns `true` when the tool was blocked by its per-turn execution policy,
+   * `false` otherwise (executed, or an error was thrown).
    *
    * The tool-result body is budgeted against the context window exactly as in
    * the pre-existing path (see {@link buildToolResultMessages});
@@ -303,7 +330,8 @@ export class ChatOrchestrator {
     input: ChatOrchestrationInput,
     workingMessages: ProviderRequestMessage[],
     toolCalls: AccumulatedToolCall[],
-  ): AsyncGenerator<ChatOrchestrationEvent> {
+    executionsByTool: Map<string, number>,
+  ): AsyncGenerator<ChatOrchestrationEvent, boolean, unknown> {
     const { tool, call } = validateToolCalls(toolCalls, input.tools);
 
     // Parse JSON only after the full call has been accumulated.
@@ -333,6 +361,37 @@ export class ChatOrchestrator {
       tool.validate(args);
     }
 
+    // Per-turn execution policy (step 41): a tool may run at most
+    // `maxExecutionsPerTurn` times within a single turn. When the limit is
+    // already reached we do NOT execute, do NOT emit any lifecycle event, and
+    // instead close the call with a synthetic harness result. The caller then
+    // disables tools for the remainder of the turn, so the model cannot keep
+    // requesting the blocked tool.
+    const perToolLimit = tool.executionPolicy?.maxExecutionsPerTurn;
+    if (
+      typeof perToolLimit === "number" &&
+      (executionsByTool.get(tool.definition.name) ?? 0) >= perToolLimit
+    ) {
+      yield* this.appendBlockedToolResult(workingMessages, call, tool.definition.name);
+      return true;
+    }
+
+    // Abort before execution: count nothing and invoke nothing.
+    if (input.signal?.aborted) {
+      return false;
+    }
+
+    // A real execution attempt is about to begin. Count it against this tool's
+    // per-turn limit immediately before invoking `execute`, so a failing tool
+    // still consumes its quota and cannot be retried indefinitely. Only calls
+    // that passed validation, resolution, policy and abort checks reach this
+    // point; unknown/malformed/invalid/blocked calls and pre-execution aborts
+    // are never counted.
+    executionsByTool.set(
+      tool.definition.name,
+      (executionsByTool.get(tool.definition.name) ?? 0) + 1,
+    );
+
     // The tool has started: emit tool_start exactly once, immediately before
     // execution. The event is generic (tool name only) so it stays valid for
     // any tool, not just web search.
@@ -343,9 +402,10 @@ export class ChatOrchestrator {
     try {
       result = await tool.execute(args, { signal: input.signal });
     } catch (error) {
-      // Cancellation during execution: no further round, silent.
+      // Cancellation during execution: no further round, silent. The attempt
+      // was already counted, so this returns false (not a policy block).
       if (input.signal?.aborted) {
-        return;
+        return false;
       }
       // Preserve provider/search error mappings (normalizeError maps both the
       // generic provider client and any concrete provider's errors onto the
@@ -364,9 +424,10 @@ export class ChatOrchestrator {
     }
 
     // Cancellation after the tool completed but before the next round: do not
-    // start it.
+    // start it. The attempt was already counted, so this returns false (not a
+    // policy block).
     if (input.signal?.aborted) {
-      return;
+      return false;
     }
 
     // Append the internal assistant tool-call / tool-result messages to the
@@ -387,6 +448,46 @@ export class ChatOrchestrator {
     const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
     yield { type: "tool_end", name: tool.definition.name };
     yield { type: "sources", sources: deliveredSources };
+
+    // Executed normally (no policy block). The only other exits are the early
+    // `return false` paths above and thrown errors.
+    return false;
+  }
+
+  /**
+   * Close a tool call that was blocked by its per-turn execution policy.
+   *
+   * Preserves the OpenAI-compatible contract by appending the assistant
+   * tool-call message and a matching `role: "tool"` result, but the result is
+   * a short, stable harness-generated note (never an internal error, config,
+   * counter, or stack trace). No `tool_start` / `tool_end` / `sources` events
+   * are emitted because no execution occurred.
+   */
+  private async *appendBlockedToolResult(
+    workingMessages: ProviderRequestMessage[],
+    call: ResolvedToolCall["call"],
+    toolName: string,
+  ): AsyncGenerator<ChatOrchestrationEvent> {
+    const syntheticContent =
+      `Tool execution skipped: the per-turn execution limit for "${toolName}" has been reached. ` +
+      `Continue using the information already available.`;
+
+    const assistantMessage: ProviderRequestMessage = {
+      role: "assistant",
+      tool_calls: [
+        {
+          id: call.id,
+          type: "function",
+          function: { name: call.function.name, arguments: call.function.arguments },
+        },
+      ],
+    };
+    const toolResultMessage: ProviderRequestMessage = {
+      role: "tool",
+      tool_call_id: call.id,
+      content: syntheticContent,
+    };
+    workingMessages.push(assistantMessage, toolResultMessage);
   }
 
   /**

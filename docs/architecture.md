@@ -253,7 +253,13 @@ interface Message {
    flushed as the final answer), or it is forced into a final **no-tools**
    round once the execution cap is reached. That final round streams live; if a
    round returns a tool call after the cap, the turn fails via the stable error
-   path instead of executing it. If the model never calls a tool, the buffered
+   path instead of executing it. A tool may also declare its own per-turn limit
+   via `executionPolicy.maxExecutionsPerTurn`; once a tool has reached that
+   limit within the turn its call is not executed and no lifecycle events are
+   emitted, and it is closed with a synthetic `role: "tool"` result (carrying
+   the same `tool_call_id`) so the OpenAI-compatible history stays valid — the
+   model is told the tool is unavailable this turn and the loop takes the final
+   no-tools round. If the model never calls a tool, the buffered
    first-round text is flushed at the end as a single `start`/`delta`/`done`
    sequence.
 5. On client cancel or disconnect, the backend stops upstream work silently.
@@ -282,7 +288,10 @@ so the buffered text is flushed at the end rather than shown progressively; this
 is not the same immediate streaming as the no-tools path. A model that requests
 an unknown tool, malformed arguments, or more calls than the per-turn cap
 (`MAX_TOOL_EXECUTIONS_PER_TURN`) receives a stable error and is told to retry
-without tools. See the roadmap for the bounded multi-step loop limits.
+without tools. A tool that has already reached its own per-turn execution limit
+(`executionPolicy.maxExecutionsPerTurn`) is skipped for the rest of the turn with a
+synthetic result rather than executed again. See the roadmap for the bounded
+multi-step loop limits.
 
 ### Documented decision: first-round buffering with Web Search
 
