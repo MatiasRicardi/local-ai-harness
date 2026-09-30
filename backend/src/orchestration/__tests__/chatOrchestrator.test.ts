@@ -282,10 +282,12 @@ describe("ChatOrchestrator — valid single tool call", () => {
     expect(tool.execute).toHaveBeenCalledTimes(1);
     expect(tool.execute).toHaveBeenCalledWith({ query: "weather" }, { signal: undefined });
 
-    // Round 1 attached tools; round 2 omitted them.
+    // Round 1 attached tools; round 2 still carries them. A tool-enabled round
+    // that returns plain text flushes its buffered text as the final answer,
+    // so only the no-tools fourth round (after the execution cap) omits tools.
     expect(calls.length).toBe(2);
     expect((calls[0].options as { tools?: unknown }).tools).toHaveLength(1);
-    expect((calls[1].options as { tools?: unknown }).tools).toBeUndefined();
+    expect((calls[1].options as { tools?: unknown }).tools).toHaveLength(1);
 
     // Round-2 request carries the internal assistant tool-call + tool-result
     // messages after the original user message.
@@ -690,16 +692,17 @@ describe("ChatOrchestrator — invalid tool calls", () => {
     ).rejects.toMatchObject({ code: "TOOL_CALL_LIMIT_EXCEEDED", statusCode: 502 });
   });
 
-  it("rejects a second tool request from round 2 with TOOL_CALL_LIMIT_EXCEEDED", async () => {
-    const { client } = createRecordingClient([
-      ...TOOL_CALL_EVENTS,
-      // Round 2: model tries to call the tool again (should not be allowed).
+  it("rejects a tool call after the execution cap with TOOL_CALL_LIMIT_EXCEEDED", async () => {
+    // Three tool rounds execute (the per-turn cap); the fourth round is sent
+    // without tool definitions, so a tool call there is rejected — never
+    // executed — via the existing safe error path. No fifth round starts.
+    const toolRound = (id: string) => [
       {
         choices: [
           {
             delta: {
               tool_calls: [
-                { index: 0, id: "call_2", type: "function", function: { name: "web_search", arguments: "{}" } },
+                { index: 0, id, type: "function", function: { name: "web_search", arguments: "{}" } },
               ],
             },
           },
@@ -707,6 +710,12 @@ describe("ChatOrchestrator — invalid tool calls", () => {
       },
       { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
       "[DONE]",
+    ];
+    const { client, calls } = createRecordingClient([
+      ...toolRound("call_1"),
+      ...toolRound("call_2"),
+      ...toolRound("call_3"),
+      ...toolRound("call_4"),
     ]);
 
     await expect(
@@ -718,6 +727,10 @@ describe("ChatOrchestrator — invalid tool calls", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "TOOL_CALL_LIMIT_EXCEEDED", statusCode: 502 });
+
+    // Three tool rounds ran with tools; the fourth ran without them.
+    expect(calls.length).toBe(4);
+    expect((calls[3].options as { tools?: unknown }).tools).toBeUndefined();
   });
 });
 
@@ -1001,5 +1014,202 @@ describe("ChatOrchestrator — provider parse error", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "INVALID_PROVIDER_RESPONSE" });
+  });
+});
+
+// ── Bounded multi-step tool loop ──────────────────────────────────────────────
+
+describe("ChatOrchestrator — bounded multi-step tool loop", () => {
+  const toolCallRound = (id: string, name = "web_search", args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text = "final") => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  it("executes two sequential tools then streams the final answer", async () => {
+    const tool = createTool("web_search", "result 2");
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "done" },
+      { type: "done" },
+    ]);
+
+    // Three model rounds: two tool rounds + a final plain-text round that still
+    // carries tool definitions (only the no-tools fourth round omits them).
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the fourth round without tool definitions after three executions", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...toolCallRound("call_3"),
+      ...plainAnswer("answer"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    expect(events).toEqual([
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "tool_start", name: "web_search" },
+      { type: "tool_end", name: "web_search" },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "answer" },
+      { type: "done" },
+    ]);
+
+    // Three tool rounds carried tools; the final round carries none.
+    expect(calls.length).toBe(4);
+    expect((calls[0].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[1].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[2].options as { tools?: unknown }).tools).toHaveLength(1);
+    expect((calls[3].options as { tools?: unknown }).tools).toBeUndefined();
+  });
+
+  it("never issues more than four model rounds in the three-tool happy path", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...toolCallRound("call_3"),
+      ...plainAnswer("answer"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    // Three tool rounds execute; the fourth is the forced no-tools round.
+    expect(calls.length).toBe(4);
+  });
+
+  it("keeps prior assistant tool calls and tool results in order across rounds", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...plainAnswer("final"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    const round3 = calls[2].messages as Array<{ role: string; [key: string]: unknown }>;
+    // user + assistant(tool call 1) + tool(1) + assistant(tool call 2) + tool(2)
+    expect(round3).toHaveLength(5);
+    expect(round3[0]).toMatchObject({ role: "user", content: "x" });
+    expect(round3[1]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "web_search" } }],
+    });
+    expect(round3[2]).toMatchObject({ role: "tool", tool_call_id: "call_1" });
+    expect(round3[3]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{ id: "call_2", type: "function", function: { name: "web_search" } }],
+    });
+    expect(round3[4]).toMatchObject({ role: "tool", tool_call_id: "call_2" });
+  });
+
+  it("preserves tool-call IDs across multiple sequential tools", async () => {
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_alpha"),
+      ...toolCallRound("call_beta"),
+      ...plainAnswer("final"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    // workingMessages accumulates in place, so round N's recorded messages carry
+    // every prior round's assistant tool-call + tool result as well as the new
+    // round's own. Assert the newest call lands at the tail and all IDs are kept.
+    const round2 = calls[1].messages as Array<{ [key: string]: unknown }>;
+    const round3 = calls[2].messages as Array<{ [key: string]: unknown }>;
+    expect((round2[1] as { tool_calls: Array<{ id: string }> }).tool_calls[0].id).toBe(
+      "call_alpha",
+    );
+    expect((round2[2] as { tool_call_id: string }).tool_call_id).toBe("call_alpha");
+    expect((round3[3] as { tool_calls: Array<{ id: string }> }).tool_calls[0].id).toBe(
+      "call_beta",
+    );
+    expect((round3[4] as { tool_call_id: string }).tool_call_id).toBe("call_beta");
+  });
+
+  it("emits the final deltas exactly once without duplicating buffered text", async () => {
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search", "{}"),
+      ...plainAnswer("only-once"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(createTool("web_search", "result")),
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "delta")).toEqual([
+      { type: "delta", text: "only-once" },
+    ]);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
   });
 });

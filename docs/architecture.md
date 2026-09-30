@@ -245,9 +245,15 @@ interface Message {
    query, emitted only after the arguments validate and immediately before
    execution), `tool_end` (`resultCount`), and `sources` (backend-sanitized
    `{ id, title, url }` with safe `http(s)` URLs only — never `content`, never a
-   key or base URL). If the model calls the tool, the final answer (round 2) is
-   streamed progressively; if it does not, the buffered first-round text is
-   flushed at the end as a single `start`/`delta`/`done` sequence.
+   key or base URL). The turn runs as a bounded loop of model rounds, each one
+   with tools attached, executing at most `MAX_TOOL_EXECUTIONS_PER_TURN` (3)
+   tools per turn and at most `MAX_MODEL_ROUNDS` (4) rounds. Each tool-enabled
+   round is buffered; the loop stops as soon as the model returns plain text,
+   or it is forced into a final **no-tools** round once the execution cap is
+   reached. That final round streams live; if a round returns a tool call after
+   the cap, the turn fails via the stable error path instead of executing it.
+   If the model never calls a tool, the buffered first-round text is flushed at
+   the end as a single `start`/`delta`/`done` sequence.
 5. On client cancel or disconnect, the backend stops upstream work silently.
 6. The frontend renders streamed tokens and maps error events to user messages.
 
@@ -271,9 +277,9 @@ a tool, the turn still completes — but the first round was accumulated (see
 [Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)),
 so the buffered text is flushed at the end rather than shown progressively; this
 is not the same immediate streaming as the no-tools path. A model that requests
-an unknown tool, malformed arguments, or more than one call receives a stable
-error and is told to retry without tools. See the roadmap for the single-tool /
-single-round MVP limits.
+an unknown tool, malformed arguments, or more calls than the per-turn cap
+(`MAX_TOOL_EXECUTIONS_PER_TURN`) receives a stable error and is told to retry
+without tools. See the roadmap for the bounded multi-step loop limits.
 
 ### Documented decision: first-round buffering with Web Search
 
@@ -285,8 +291,9 @@ to discard it when the tool is called — would be worse than buffering it.
 
 Consequences for what the user sees:
 
-- **Web Search enabled, model calls the tool** — the final answer (round 2) is
-  streamed progressively, token by token, after the single tool execution.
+- **Web Search enabled, model calls the tool** — the final answer (the forced
+  no-tools round, or the first round that returns plain text) is streamed
+  progressively, token by token, after one or more tool executions.
 - **Web Search enabled, model does not call the tool** — the buffered first-round
   text is flushed at the end as a single `start`/`delta`/`done` sequence; it is
   not shown progressively.
