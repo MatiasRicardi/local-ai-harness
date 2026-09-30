@@ -21,7 +21,8 @@ describe("ChatMessages", () => {
 
   it("renders user and assistant messages", () => {
     wrapper = mount(ChatMessages, {
-      props: { messages: [user("hi"), assistant("hello there")], loading: false, activity: "idle", error: null, stopped: false },
+      props: { messages: [user("hi"), assistant("hello there")], loading: false, activity: "idle",
+        activeToolName: null, error: null, stopped: false },
     })
 
     expect(wrapper.find(".message-user .message-text").text()).toBe("hi")
@@ -36,6 +37,7 @@ describe("ChatMessages", () => {
         messages: [assistant("Hello **world**")],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -52,6 +54,7 @@ describe("ChatMessages", () => {
         messages: [],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: new FrontendApiError({
           code: "CONTEXT_TOO_LARGE",
           message: "Prompt tokens exceed the limit.",
@@ -68,14 +71,16 @@ describe("ChatMessages", () => {
 
   it("does not show the error area when there is no error", () => {
     wrapper = mount(ChatMessages, {
-      props: { messages: [user("hi")], loading: false, activity: "idle", error: null, stopped: false },
+      props: { messages: [user("hi")], loading: false, activity: "idle",
+        activeToolName: null, error: null, stopped: false },
     })
     expect(wrapper.find(".error").exists()).toBe(false)
   })
 
   it("shows the stopped indicator for a cancelled generation", () => {
     wrapper = mount(ChatMessages, {
-      props: { messages: [assistant("partial answer", true)], loading: false, activity: "idle", error: null, stopped: true },
+      props: { messages: [assistant("partial answer", true)], loading: false, activity: "idle",
+        activeToolName: null, error: null, stopped: true },
     })
 
     // Top-level stopped banner.
@@ -89,23 +94,33 @@ describe("ChatMessages", () => {
 
   it("shows the loading indicator while generating", () => {
     wrapper = mount(ChatMessages, {
-      props: { messages: [], loading: true, activity: "generating", error: null, stopped: false },
+      props: { messages: [], loading: true, activity: "generating",
+        activeToolName: null, error: null, stopped: false },
     })
     expect(wrapper.find(".loading").exists()).toBe(true)
   })
 
-  it("shows the searching activity label without touching the assistant bubble", () => {
-    wrapper = mount(ChatMessages, {
-      props: {
-        messages: [assistant("partial")],
-        loading: true,
-        activity: "searching",
-        error: null,
-        stopped: false,
-      },
-    })
-    expect(wrapper.find(".loading").text()).toContain("Searching the web…")
-  })
+  it.each([
+    ["web_search", "Searching the web…"],
+    ["fetch_url", "Reading a web page…"],
+    ["calculator", "Calculating…"],
+    ["some_internal_tool", "Using a tool…"],
+  ])(
+    "maps a running tool name to its label without touching the assistant bubble (%s)",
+    (activeToolName, expected) => {
+      wrapper = mount(ChatMessages, {
+        props: {
+          messages: [assistant("partial")],
+          loading: true,
+          activity: "tool",
+          activeToolName,
+          error: null,
+          stopped: false,
+        },
+      })
+      expect(wrapper.find(".loading").text()).toContain(expected)
+    },
+  )
 
   it("renders backend sources under the correct assistant turn", () => {
     wrapper = mount(ChatMessages, {
@@ -119,6 +134,7 @@ describe("ChatMessages", () => {
         ],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -142,6 +158,7 @@ describe("ChatMessages", () => {
         messages: [assistant("plain answer")],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -159,6 +176,7 @@ describe("ChatMessages", () => {
         ],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -181,6 +199,7 @@ describe("ChatMessages", () => {
         ],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -202,6 +221,7 @@ describe("ChatMessages", () => {
         ],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },
@@ -221,6 +241,7 @@ describe("ChatMessages", () => {
         ],
         loading: false,
         activity: "idle",
+        activeToolName: null,
         error: null,
         stopped: false,
       },

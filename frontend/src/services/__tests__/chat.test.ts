@@ -297,8 +297,8 @@ describe("streamChat", () => {
       }
       const sse = [
         "event: start\ndata: {\"model\":\"m\"}\n\n",
-        'event: tool_start\ndata: {"name":"web_search","query":"cats"}\n\n',
-        'event: tool_end\ndata: {"name":"web_search","resultCount":1}\n\n',
+        'event: tool_start\ndata: {"name":"web_search"}\n\n',
+        'event: tool_end\ndata: {"name":"web_search"}\n\n',
         'event: sources\ndata: {"sources":[{"id":1,"title":"Cats","url":"https://example.com/cats"}]}\n\n',
         "event: delta\ndata: {\"text\":\"Hello\"}\n\n",
         "event: done\ndata: {}\n\n",
@@ -307,8 +307,8 @@ describe("streamChat", () => {
 
       await streamChat([], provider, callbacks as unknown as StreamCallbacks)
 
-      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search", query: "cats" })
-      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search", resultCount: 1 })
+      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search" })
+      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search" })
       expect(callbacks.onSources).toHaveBeenCalledWith([
         { id: 1, title: "Cats", url: "https://example.com/cats" },
       ])
@@ -331,8 +331,8 @@ describe("streamChat", () => {
           .mockResolvedValue(
             okResponse(
               sseStream([
-                'event: tool_start\ndata: {"name":"web_search","query":"cats"}\n\nevent: tool_en',
-                'd\ndata: {"name":"web_search","resultCount":2}\n\nevent: sources\ndata: {"sources":[]}\n\n',
+                'event: tool_start\ndata: {"name":"web_search"}\n\nevent: tool_en',
+                'd\ndata: {"name":"web_search"}\n\nevent: sources\ndata: {"sources":[]}\n\n',
               ]),
             ),
           ),
@@ -340,8 +340,8 @@ describe("streamChat", () => {
 
       await streamChat([], provider, callbacks as unknown as StreamCallbacks)
 
-      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search", query: "cats" })
-      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search", resultCount: 2 })
+      expect(callbacks.onToolStart).toHaveBeenCalledWith({ name: "web_search" })
+      expect(callbacks.onToolEnd).toHaveBeenCalledWith({ name: "web_search" })
       expect(callbacks.onSources).toHaveBeenCalledWith([])
       expect(callbacks.onError).not.toHaveBeenCalled()
     })

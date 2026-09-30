@@ -32,10 +32,11 @@ const errors = ref<Record<AppErrorArea, FrontendApiError | null>>({
 })
 const sending = ref(false)
 const stopped = ref(false)
-const webSearching = ref(false)
-// Transient web-search activity for the in-progress turn only. True strictly
-// between the backend `tool_start` and `tool_end` events; the UI shows a
-// "Searching the web…" line during this window (see `searchActivity`).
+// Generic, tool-agnostic activity for the in-progress turn only. Set to the
+// tool name on the backend `tool_start` event and cleared on the matching
+// `tool_end` (or on done/error/cancel/reset); `ChatMessages` renders it as a
+// human label (see its `activityLabel`). Kept free of any specific-tool notion.
+const activeToolName = ref<string | null>(null)
 const attachedDocument = ref<AttachedDocument | null>(null)
 const uploadingDocument = ref(false)
 const messagesEnd = ref<HTMLElement>()
@@ -65,6 +66,14 @@ const webSearchSettings = useWebSearchSettings()
 // live connection state (that stays inside ProviderSettings' Test Connection).
 const configuredModel = computed(() => providerSettings.value.model.trim())
 
+// Presentation of the current generation's activity, derived from the existing
+// busy flags so no part of the streaming state machine needs refactoring:
+// idle (idle) | tool (a backend tool is running) | generating (streaming answer).
+type GenerationActivity = "idle" | "tool" | "generating"
+const activity = computed<GenerationActivity>(() =>
+  loading.value ? (activeToolName.value ? "tool" : "generating") : "idle",
+)
+
 const endpointSummary = computed(() => {
   const { name, baseUrl } = providerSettings.value
   // Drop the scheme and any trailing slash: purely cosmetic, no inference.
@@ -79,14 +88,6 @@ const configuredContext = computed(() => {
   const tokens = providerSettings.value.contextSizeTokens
   return Number.isFinite(tokens) ? tokens.toLocaleString() : ""
 })
-
-// Presentation of the current generation's activity, derived from the existing
-// busy flags so no part of the streaming state machine needs refactoring:
-// idle (idle) | searching (web search running) | generating (streaming answer).
-type GenerationActivity = "idle" | "searching" | "generating"
-const searchActivity = computed<GenerationActivity>(() =>
-  loading.value ? (webSearching.value ? "searching" : "generating") : "idle",
-)
 
 // Show the welcome screen only for a genuinely empty transcript: an error,
 // a stopped turn or any message keeps the transcript itself on screen.
@@ -103,7 +104,7 @@ function cleanup() {
   sending.value = false
   loading.value = false
   stopped.value = false
-  webSearching.value = false
+  activeToolName.value = null
 }
 
 function handleStop() {
@@ -126,7 +127,7 @@ function normalizeBusyState() {
   sending.value = false
   loading.value = false
   stopped.value = false
-  webSearching.value = false
+  activeToolName.value = null
 }
 
 function handleReset() {
@@ -340,14 +341,16 @@ async function handleSend(text: string) {
       cleanup()
       scrollToBottom("auto")
     },
-    onToolStart: () => {
+    onToolStart: ({ name }) => {
       if (currentGenerationId !== generationId) return
-      webSearching.value = true
+      activeToolName.value = name
       scrollToBottom("auto")
     },
-    onToolEnd: () => {
+    onToolEnd: ({ name }) => {
       if (currentGenerationId !== generationId) return
-      webSearching.value = false
+      // Match the tool name so a stray/misordered event cannot clear the
+      // wrong tool; leaves the state ready for a later multi-step lifecycle.
+      if (activeToolName.value === name) activeToolName.value = null
     },
     onSources: (sources) => {
       // Ignore callbacks from a previous generation (reset/cancel happened).
@@ -439,7 +442,8 @@ async function handleSend(text: string) {
             <ChatMessages
               :messages="messages"
               :loading="loading"
-              :activity="searchActivity"
+              :activity="activity"
+              :active-tool-name="activeToolName"
               :error="chatError"
               :stopped="stopped"
             />
