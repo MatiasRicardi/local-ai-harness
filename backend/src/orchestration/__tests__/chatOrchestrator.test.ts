@@ -42,10 +42,10 @@ interface RecordedCall {
 
 /**
  * A recording fake provider client. `chatStream` returns the next SSE stream
- * per call, splitting the flat event list at each `[DONE]` marker so round 1
- * and round 2 each get exactly their own events (as a real provider would).
- * Records every call (config, messages, options) so tests can assert on the
- * round-1 / round-2 request shape.
+ * per call, splitting the flat event list at each `[DONE]` marker so each
+ * chunk gets exactly its own events (as a real provider would).
+ * Records every call (config, messages, options) so tests can assert on each
+ * round's request shape.
  */
 function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   client: ProviderClient;
@@ -314,12 +314,12 @@ const TOOL_CALL_EVENTS = [
     "[DONE]",
 ];
 
-describe("ChatOrchestrator — valid single tool call", () => {
-  it("executes the tool once, then streams round 2 with no tools", async () => {
+describe("ChatOrchestrator — valid tool call execution", () => {
+  it("executes one tool, then flushes the buffered plain-text answer from the next tool-enabled round", async () => {
     const tool = createTool("web_search", "Search results: ...");
     const { client, calls } = createRecordingClient([
       ...TOOL_CALL_EVENTS,
-      // Round 2: the final answer.
+      // The next tool-enabled round: the final answer.
       { choices: [{ delta: { content: "The weather is sunny." } }] },
       { choices: [{ delta: {}, finish_reason: "stop" }] },
       "[DONE]",
@@ -333,8 +333,9 @@ describe("ChatOrchestrator — valid single tool call", () => {
       }),
     );
 
-    // The pre-tool filler text is discarded; only round 2 text is visible. The
-    // tool lifecycle is exposed as structured events before the final answer.
+    // The pre-tool filler text is discarded; only the buffered plain-text
+    // answer is visible. The tool lifecycle is exposed as structured events
+    // before the final answer.
     expect(events).toEqual([
       { type: "tool_start", name: "web_search" },
       { type: "tool_end", name: "web_search" },
@@ -347,15 +348,15 @@ describe("ChatOrchestrator — valid single tool call", () => {
     expect(tool.execute).toHaveBeenCalledTimes(1);
     expect(tool.execute).toHaveBeenCalledWith({ query: "weather" }, { signal: undefined });
 
-    // Round 1 attached tools; round 2 still carries them. A tool-enabled round
-    // that returns plain text flushes its buffered text as the final answer,
-    // so only the no-tools fourth round (after the execution cap) omits tools.
+    // Both rounds carry tools. A tool-enabled round that returns plain text
+    // flushes its buffered text as the final answer, so only the forced
+    // no-tools final round (after the execution cap) omits tools.
     expect(calls.length).toBe(2);
     expect((calls[0].options as { tools?: unknown }).tools).toHaveLength(1);
     expect((calls[1].options as { tools?: unknown }).tools).toHaveLength(1);
 
-    // Round-2 request carries the internal assistant tool-call + tool-result
-    // messages after the original user message.
+    // The tool-enabled round carries the internal assistant tool-call +
+    // tool-result messages after the original user message.
     const round2 = calls[1].messages as Array<{ role: string; [key: string]: unknown }>;
     expect(round2).toHaveLength(3);
     expect(round2[0]).toMatchObject({ role: "user", content: "what is the weather" });
@@ -436,7 +437,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps block 1 and drops block 2 entirely.
+    // The following round's content keeps block 1 and drops block 2 entirely.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
     expect(toolResult?.content).toContain("[1]\nTitle: First");
@@ -491,7 +492,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps source 1's block (with its inline "[2]\nTitle:") and
+    // The following round's content keeps source 1's block (with its inline "[2]\nTitle:") and
     // drops source 2's real block, so source 2 is never attributed.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
@@ -550,7 +551,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
       ]);
     }
 
-    // Round-2 content keeps source 1's whole block (including the embedded
+    // The following round's content keeps source 1's whole block (including the embedded
     // blank-line "[2]\nTitle:" paragraph) and drops source 2's real block.
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
@@ -573,7 +574,7 @@ describe("ChatOrchestrator — valid single tool call", () => {
     );
     const { client, calls } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
 
-    // A context window far too small for the round-2 overhead leaves no room
+    // A context window far too small for the round overhead leaves no room
     // for the web content, so nothing is delivered to the model.
     const events = await collect(
       new ChatOrchestrator(client).stream({
@@ -861,7 +862,7 @@ describe("ChatOrchestrator — tool lifecycle events", () => {
       }),
     );
 
-    // tool events precede the round-2 streaming answer.
+    // tool events precede the buffered plain-text answer.
     expect(events).toEqual([
       { type: "tool_start", name: "web_search" },
       { type: "tool_end", name: "web_search" },
@@ -967,12 +968,12 @@ describe("ChatOrchestrator — cancellation", () => {
     expect(client.chatStream).toHaveBeenCalledTimes(1);
   });
 
-  it("does not start round 2 when aborted after round 1", async () => {
-    // Abort inside the tool execution: round 1 completes, the tool runs, but
-    // the post-tool guard must prevent round 2 from starting. tool_start was
-    // already emitted (the search had begun) before the abort, so the stream
-    // ends silently with just that one event — no tool_end, no sources, no
-    // error, no round 2.
+  it("does not start the next model round after the tool round when aborted", async () => {
+    // Abort inside the tool execution: the tool round completes and the tool
+    // runs, but the post-tool guard must prevent the next model round from
+    // starting. tool_start was already emitted (the search had begun) before
+    // the abort, so the stream ends silently with just that one event — no
+    // tool_end, no sources, no error.
     const controller = new AbortController();
     const tool = createTool("web_search", "result", async () => {
       controller.abort();
@@ -991,7 +992,7 @@ describe("ChatOrchestrator — cancellation", () => {
 
     expect(events).toEqual([{ type: "tool_start", name: "web_search" }]);
     expect(tool.execute).toHaveBeenCalledTimes(1);
-    // Only round 1 was issued; no round-2 request.
+    // Only the tool round was issued; no request for the next model round.
     expect(calls.length).toBe(1);
   });
 });

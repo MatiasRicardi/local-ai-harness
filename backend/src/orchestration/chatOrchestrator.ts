@@ -132,7 +132,7 @@ function toStructuredSources(value: unknown): WebSearchSource[] {
 }
 
 /**
- * Which source IDs actually entered the model's round-2 context.
+ * Which source IDs actually entered the model's context.
  *
  * The full web content is the untrusted marker followed by one exact
  * `[id]`-prefixed block per source (see webSearchFormat), joined by a blank
@@ -267,7 +267,7 @@ export class ChatOrchestrator {
       yield* this.executeToolRound(input, workingMessages, round.toolCalls);
 
       // Cancellation during/just after execution: stop before the next round,
-      // silently, matching the pre-existing single-tool semantics.
+      // silently, matching the pre-existing cancellation semantics.
       if (input.signal?.aborted) {
         return;
       }
@@ -295,7 +295,7 @@ export class ChatOrchestrator {
    * `tool_start` / `tool_end` / `sources` lifecycle events in order.
    *
    * The tool-result body is budgeted against the context window exactly as in
-   * the pre-existing single-tool path (see {@link buildToolResultMessages});
+   * the pre-existing path (see {@link buildToolResultMessages});
    * this is intentionally per-result and does not yet aggregate budgets across
    * multiple accumulated results (step 42 owns that).
    */
@@ -447,10 +447,9 @@ export class ChatOrchestrator {
       : webContent;
 
     // Report only the sources whose blocks are actually present in the (possibly
-    // truncated) content sent to the model, so the emitted `sources` event and
-    // `tool_end.resultCount` stay consistent with the delivered content. The set
-    // is derived from complete block boundaries, not from a substring search of
-    // the (untrusted) body.
+    // truncated) content sent to the model, so the emitted `sources` event stays
+    // consistent with the delivered content. The set is derived from complete
+    // block boundaries, not from a substring search of the (untrusted) body.
     const structuredSources = webContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
       ? toStructuredSources(result.metadata?.sources)
       : [];
@@ -547,9 +546,14 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Stream a model round live, forwarding deltas and the final `done` to the
-   * caller. Used for the no-tools pass-through path and for round 2 (the final
-   * visible answer), where no buffering is required.
+   * Stream a model round progressively, forwarding deltas and the final `done`
+   * to the caller, with no buffering.
+   *
+   * Used for:
+   *   - a normal no-tools pass-through;
+   *   - the forced final no-tools round after the tool-execution cap is reached.
+   *
+   * Unexpected tool calls are rejected through the existing safe error path.
    */
   private async *streamRoundLive(opts: {
     providerConfig: ProviderConfig;
@@ -574,9 +578,10 @@ export class ChatOrchestrator {
         if (event.type === "delta") {
           yield { type: "delta", text: sanitizeSseData(event.text) };
         } else if (event.type === "tool_calls") {
-          // This round runs with no tools attached (no-tools pass-through or
-          // round 2). Any tool call is a protocol violation — a provider trying
-          // to open a second tool round — and is rejected rather than ignored.
+          // This round runs with no tools attached (a normal no-tools
+          // pass-through or the forced final no-tools round). Any tool call is a
+          // protocol violation — a provider trying to open another tool round —
+          // and is rejected rather than ignored.
           throw new AppError({
             code: "TOOL_CALL_LIMIT_EXCEEDED",
             statusCode: 502,
