@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { OpenAICompatibleClient } from "../provider/client.js";
-import { chatRequestSchema, type ChatMessage, type WebSearchConfig } from "../provider/schemas.js";
+import { chatRequestSchema, type ChatMessage } from "../provider/schemas.js";
 import {
   normalizeError,
   logNormalizedError,
@@ -11,16 +11,13 @@ import {
   buildDocumentContextMessage,
   buildDocumentContentMessage,
 } from "../utils/documentContext.js";
+import { buildToolRegistry } from "../tools/buildToolRegistry.js";
 import {
   calculateContextBudget,
   type ContextTruncationMetadata,
 } from "../context/context-budget.js";
 import { config } from "../config/env.js";
 import { ChatOrchestrator } from "../orchestration/chatOrchestrator.js";
-import { TavilySearchProvider } from "../search/tavily.js";
-import { createWebSearchTool } from "../tools/webSearchTool.js";
-import { createToolRegistry } from "../tools/registry.js";
-import type { ToolRegistry } from "../tools/types.js";
 import { buildWebSearchGuidanceMessage } from "../utils/webSearchPrompt.js";
 
 /**
@@ -51,46 +48,6 @@ function buildAllMessages(
     buildDocumentContentMessage(document),
     ...messages,
   ];
-}
-
-/**
- * Backend-authoritative defaults for the application/user-controlled web search
- * knobs. The model cannot change these (they are not part of the tool input
- * schema); they are only the fallbacks used when the request omits them.
- */
-const WEB_SEARCH_DEFAULT_MAX_RESULTS = 5;
-const WEB_SEARCH_DEFAULT_SEARCH_DEPTH = "basic" as const;
-
-/**
- * Build the request-scoped web search tool registry for a chat request.
- *
- * Returns `undefined` when web search is not enabled so the caller keeps the
- * plain v1.0.0 path. When enabled, the Tavily base URL comes from backend
- * configuration (`config.TAVILY_BASE_URL`) and the API key is injected
- * request-scoped: neither is ever persisted, logged, or echoed back through
- * SSE, tool content, sources, or error details.
- */
-function buildWebSearchRegistry(webSearch: WebSearchConfig | undefined): ToolRegistry | undefined {
-  if (!webSearch?.enabled) {
-    return undefined;
-  }
-
-  const provider = new TavilySearchProvider({
-    baseUrl: config.TAVILY_BASE_URL,
-    apiKey: webSearch.apiKey as string,
-  });
-
-  const tool = createWebSearchTool(
-    {
-      maxResults: webSearch.maxResults ?? WEB_SEARCH_DEFAULT_MAX_RESULTS,
-      searchDepth: webSearch.searchDepth ?? WEB_SEARCH_DEFAULT_SEARCH_DEPTH,
-    },
-    provider,
-  );
-
-  const registry = createToolRegistry();
-  registry.register(tool);
-  return registry;
 }
 
 /**
@@ -154,10 +111,15 @@ const chat: FastifyPluginAsync = async (server) => {
       : undefined;
     const allMessages = buildAllMessages(documentForMessages, messages);
 
-    // Web search is only supported on the streaming endpoint. Reject an
-    // explicitly enabled request here rather than silently ignoring it, so the
-    // non-streaming endpoint keeps its documented v1.0.0 behavior.
-    if (result.data.webSearch?.enabled === true) {
+    // Built-in tools are only supported on the streaming endpoint. Detect tool
+    // availability generically through the request-scoped registry (rather than
+    // the web_search flag) so this stays correct as new tools are added, while
+    // the rejection itself keeps its documented v1.0.0 behavior.
+    const toolRegistry = buildToolRegistry({
+      webSearch: result.data.webSearch,
+    });
+
+    if (toolRegistry) {
       throw new AppError({
         code: "VALIDATION_ERROR",
         statusCode: 400,
@@ -335,13 +297,16 @@ const chat: FastifyPluginAsync = async (server) => {
       data: startEventData,
     });
 
-    // Build the request-scoped web search registry (undefined when web search is
-    // not enabled, keeping the plain v1.0.0 streaming path).
-    const webSearchRegistry = buildWebSearchRegistry(result.data.webSearch);
+    // Build the request-scoped tool registry (undefined when no tool is
+    // enabled, keeping the plain v1.0.0 streaming path). Tool availability is
+    // decided from the registry itself, not from a per-tool flag.
+    const toolRegistry = buildToolRegistry({
+      webSearch: result.data.webSearch,
+    });
 
     try {
-      if (webSearchRegistry) {
-        // Web search enabled: run the turn through the single-tool orchestrator.
+      if (toolRegistry) {
+        // A tool is enabled: run the turn through the single-tool orchestrator.
         // The safety guidance is prepended as a system message, and the tool
         // registry is request-scoped. Internal tool-call/tool-result messages and
         // the search results never surface as visible assistant text.
@@ -359,7 +324,7 @@ const chat: FastifyPluginAsync = async (server) => {
             timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
           },
           messages: orchestratedMessages,
-          tools: webSearchRegistry,
+          tools: toolRegistry,
           signal: clientDisconnect.signal,
           contextSizeTokens,
         })) {
