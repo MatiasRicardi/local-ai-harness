@@ -11,61 +11,67 @@ import {
 const CHARACTERS_PER_TOKEN = 4;
 
 /**
- * Result of budgeting web/tool-search result content against the input budget.
+ * Result of budgeting an arbitrary tool-result body against the input budget.
  */
 export interface ToolResultBudgetResult {
   /**
    * Number of tool-result characters that fit after the rest of the request.
-   * `0` means the web content did not fit at all and must be dropped.
+   * `0` means the tool content did not fit at all and must be omitted.
    */
-  includedWebCharacters: number;
+  includedToolCharacters: number;
   /** The original tool-result character count, before budgeting. */
-  originalWebCharacters: number;
-  /** `true` when the tool-result content had to be shrinked to fit. */
+  originalToolCharacters: number;
+  /** `true` when the tool-result content had to be shrinked or omitted to fit. */
   truncated: boolean;
 }
 
 /**
- * Budget optional web/tool-search result content for the second model round.
+ * Budget an arbitrary tool-result body for the round in which it is sent.
  *
- * The rest of the request (conversation, document context and the two internal
- * orchestration messages — the assistant tool-call message and the tool-result
- * message structure) is treated as fixed and is never shrinked. Only the web
- * result content is shrinked to fit, and only after the current user message
- * and everything above it in priority is already accounted for.
+ * The rest of the request (conversation, document context and the internal
+ * orchestration messages — the assistant tool-call message and the `role: "tool"`
+ * result structure, including its mandatory fallback text) is treated as fixed
+ * and is never shrinked. Only the tool-result *body* is shrinked or omitted to
+ * fit, and only after the current user message and everything above it in
+ * priority is already accounted for.
+ *
+ * The budget is recomputed every time a new tool result is accumulated, so the
+ * fixed content already includes every prior tool-call and tool-result message:
+ * a chain of tools therefore shares one finite, cumulative input budget instead
+ * of each getting an independent full-size allowance.
  *
  * @param maxTokens          configured model context window for this request.
- * @param messageTokens      estimated tokens of the entire round-2 request
- *                           **except** the web-result body (which is what is
- *                           being budgeted here). Must already include the
- *                           overhead of the internal assistant tool-call and
- *                           tool-result messages plus the response reserve is
- *                           applied separately below.
- * @param webResultCharacters character count of the raw tool-result content.
+ * @param messageTokens      estimated tokens of the entire round request
+ *                           **except** the tool-result body (what is budgeted
+ *                           here). Must already include the full overhead of the
+ *                           internal assistant tool-call and tool-result messages
+ *                           (with the mandatory omission fallback as its content)
+ *                           plus the response reserve applied separately below.
+ * @param toolResultCharacters character count of the raw tool-result content.
  */
 export function calculateToolResultBudget({
   maxTokens,
   messageTokens,
-  webResultCharacters,
+  toolResultCharacters,
 }: {
   maxTokens: number;
   messageTokens: number;
-  webResultCharacters: number;
+  toolResultCharacters: number;
 }): ToolResultBudgetResult {
   const usableContextTokens = calculateUsableContextTokens(maxTokens);
   const responseReserveTokens = calculateResponseReserveTokens(usableContextTokens);
   const inputBudgetTokens = calculateInputBudgetTokens(usableContextTokens, responseReserveTokens);
 
   // Whatever is left of the input budget after the fixed content. Never negative:
-  // if the fixed content already exhausts the budget, the web content is simply
+  // if the fixed content already exhausts the budget, the tool content is simply
   // dropped (0 characters) instead of displacing anything more important.
-  const availableForWebTokens = Math.max(inputBudgetTokens - messageTokens, 0);
-  const maxWebCharacters = Math.min(webResultCharacters, availableForWebTokens * CHARACTERS_PER_TOKEN);
+  const availableForToolTokens = Math.max(inputBudgetTokens - messageTokens, 0);
+  const maxToolCharacters = Math.min(toolResultCharacters, availableForToolTokens * CHARACTERS_PER_TOKEN);
 
   return {
-    includedWebCharacters: maxWebCharacters,
-    originalWebCharacters: webResultCharacters,
-    truncated: maxWebCharacters < webResultCharacters,
+    includedToolCharacters: maxToolCharacters,
+    originalToolCharacters: toolResultCharacters,
+    truncated: maxToolCharacters < toolResultCharacters,
   };
 }
 

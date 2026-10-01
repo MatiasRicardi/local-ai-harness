@@ -1,10 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { ChatOrchestrator } from "../chatOrchestrator.js";
+import { ChatOrchestrator, TOOL_RESULT_CONTEXT_OMISSION_TEXT } from "../chatOrchestrator.js";
 import type { ProviderClient } from "../../provider/types.js";
 import type { ProviderConfig } from "../../provider/schemas.js";
 import type { Tool, ToolRegistry } from "../../tools/types.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../../provider/client.js";
 import { AppError } from "../../utils/errorHandler.js";
+import { estimateTokens } from "../../context/token-estimate.js";
 
 // The untrusted-content marker injected at the top of every web-search result.
 const WEB_SEARCH_MARKER =
@@ -45,7 +46,9 @@ interface RecordedCall {
  * per call, splitting the flat event list at each `[DONE]` marker so each
  * chunk gets exactly its own events (as a real provider would).
  * Records every call (config, messages, options) so tests can assert on each
- * round's request shape.
+ * round's request shape. `messages` is snapshotted per call (by value), so a
+ * recorded round reflects exactly what the provider received at that moment
+ * rather than a reference to the orchestrator's mutable working-messages array.
  */
 function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   client: ProviderClient;
@@ -70,7 +73,12 @@ function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   const client = {
     chat: vi.fn(),
     chatStream: vi.fn((_config: ProviderConfig, _messages: unknown, _options?: unknown) => {
-      calls.push({ config: _config, messages: _messages, options: _options });
+      // Snapshot the request by value so each recorded round reflects exactly
+      // what the provider received at that moment, not a reference to the
+      // orchestrator's working-messages array (which keeps mutating across
+      // rounds). Without this, every `calls[n].messages` would end up pointing
+      // at the final, fully-accumulated state.
+      calls.push({ config: _config, messages: structuredClone(_messages), options: _options });
       return sseStream(rounds[round++] ?? []);
     }),
   } as unknown as ProviderClient;
@@ -575,7 +583,7 @@ describe("ChatOrchestrator — valid tool call execution", () => {
     const { client, calls } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
 
     // A context window far too small for the round overhead leaves no room
-    // for the web content, so nothing is delivered to the model.
+    // for the web content, so no source block is delivered to the model.
     const events = await collect(
       new ChatOrchestrator(client).stream({
         providerConfig: CONFIG,
@@ -592,7 +600,10 @@ describe("ChatOrchestrator — valid tool call execution", () => {
 
     const round2 = calls[1].messages as Array<{ role: string; content?: string }>;
     const toolResult = round2.find((message) => message.role === "tool");
-    expect(toolResult?.content).toBe("");
+    // No room for the payload: the model still gets a valid role:"tool" message,
+    // carrying the harness omission note (not an empty body) so it can tell
+    // "omitted by context budget" apart from "the tool returned nothing".
+    expect(toolResult?.content).toBe(TOOL_RESULT_CONTEXT_OMISSION_TEXT);
   });
 
   it("passes the cancellation signal through to the tool", async () => {
@@ -1316,5 +1327,180 @@ describe("ChatOrchestrator — bounded multi-step tool loop", () => {
       { type: "delta", text: "only-once" },
     ]);
     expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+  });
+});
+// ── Step 42 — generic multi-result tool budgeting ────────────────────────────
+
+describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
+  const toolCallRound = (id: string, name = "web_search", args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text = "final") => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  /** A web-search shaped result: the untrusted marker + one `[id]` source block. */
+  const webResult = (id: number, pad = 800): string =>
+    `${WEB_SEARCH_MARKER}\n\n[${id}]\nTitle: Result ${id}\nURL: https://example.com/${id}\nContent: ${"c".repeat(pad)}`;
+
+  it("shares one finite cumulative budget across a three-tool chain", async () => {
+    const results = [webResult(1), webResult(2), webResult(3)];
+    let callIndex = 0;
+    const tool = createTool("web_search", "", async () => ({ content: results[callIndex++] }));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...toolCallRound("call_2"),
+      ...toolCallRound("call_3"),
+      ...plainAnswer("done"),
+    ]);
+
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("lookup")],
+        tools: createRegistry(tool),
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    // With a per-request snapshot each recorded call reflects the exact state
+    // sent that round: round 2 carries [user, ac1, tr1], round 3 adds tr2, and
+    // round 4 adds tr3. The tool results sit at fixed indices within each round.
+    const tr1 = (calls[1]?.messages as Array<{ content?: string }>)[2];
+    const tr2 = (calls[2]?.messages as Array<{ content?: string }>)[4];
+    const tr3 = (calls[3]?.messages as Array<{ content?: string }>)[6];
+
+    // Tool 1: plenty of room after the fixed content, the whole result fits.
+    expect(tr1?.content).toBe(webResult(1));
+    // Tool 2: tool 1 already consumed most of the budget, so it is truncated.
+    expect(tr2?.content).toBeDefined();
+    expect(tr2?.content).not.toBe(webResult(2));
+    expect((tr2?.content ?? "").length).toBeLessThan(webResult(2).length);
+    expect((tr2?.content ?? "").startsWith(WEB_SEARCH_MARKER)).toBe(true);
+    // Tool 3: almost no room left, heavily truncated.
+    expect((tr3?.content ?? "").length).toBeLessThan((tr2?.content ?? "").length);
+
+    // The budget is cumulative and monotonic: each result gets strictly less
+    // room than the previous one, and the final request stays within the
+    // configured context target according to the project's estimator.
+    expect((tr1?.content ?? "").length).toBeGreaterThan((tr2?.content ?? "").length);
+    // The final request (round 4) stays within the configured context target.
+    expect(estimateTokens(JSON.stringify(calls[3]?.messages))).toBeLessThanOrEqual(1024);
+  });
+
+  it("lets a prior assistant tool_call with large arguments shrink the next result", async () => {
+    const run = async (firstArgs: string): Promise<string> => {
+      const tool = createTool("web_search", webResult(1));
+      const { client, calls } = createRecordingClient([
+        ...toolCallRound("call_1", "web_search", firstArgs),
+        ...plainAnswer("done"),
+      ]);
+      await collect(
+        new ChatOrchestrator(client).stream({
+          providerConfig: CONFIG,
+          messages: [userMessage("lookup")],
+          tools: createRegistry(tool),
+          contextSizeTokens: 1024,
+        }),
+      );
+      // Round 2 carries [user, ac1, tr1]; the tool result is at index 2.
+      const round2 = calls[1]?.messages as Array<{ content?: string }>;
+      return round2[2]?.content ?? "";
+    };
+
+    const smallArgsResult = await run("{}");
+    const largeArgsResult = await run(`"${"x".repeat(1200)}"`);
+
+    // With small arguments the first result fits in full; with large arguments
+    // the fixed cost of the prior assistant tool_call leaves far less room, so
+    // the result is truncated. This proves assistant `tool_calls` (name +
+    // arguments) now count against the budget, not just `content`.
+    expect(smallArgsResult).toBe(webResult(1));
+    expect(largeArgsResult.length).toBeLessThan(smallArgsResult.length);
+    expect(largeArgsResult.startsWith(WEB_SEARCH_MARKER)).toBe(true);
+  });
+
+  it("keeps the no-room case provider-protocol-valid without throwing", async () => {
+    const tool = createTool("web_search", webResult(9, 5000));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1"),
+      ...plainAnswer("done"),
+    ]);
+
+    // Should not throw: a valid assistant tool_call + a valid role:"tool" message.
+    await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("lookup")],
+        tools: createRegistry(tool),
+        contextSizeTokens: 1,
+      }),
+    );
+
+    // Round 2 carries [user, ac1, tr1].
+    const round2 = calls[1]?.messages as Array<{
+      role: string;
+      content?: string;
+      tool_calls?: unknown;
+      tool_call_id?: unknown;
+    }>;
+    const assistantCall = round2.find((m) => m.role === "assistant");
+    const toolResult = round2.find((m) => m.role === "tool");
+    expect(assistantCall).toBeDefined();
+    expect(assistantCall?.tool_calls).toHaveLength(1);
+    expect(toolResult?.role).toBe("tool");
+    expect(toolResult?.tool_call_id).toBeDefined();
+    // No room for the payload: the harness emits the omission note (not empty),
+    // so the model can tell "omitted by context budget" apart from "empty".
+    expect(toolResult?.content).toBe(TOOL_RESULT_CONTEXT_OMISSION_TEXT);
+  });
+
+  it("emits only the sources whose blocks fit the budget (web truncation preserved)", async () => {
+    const bigBody = "b".repeat(6000);
+    const tool = createTool(
+      "web_search",
+      "",
+      async () => ({
+        content:
+          `${WEB_SEARCH_MARKER}\n\n[1]\nTitle: First\nURL: https://example.com/1\nContent: first\n\n` +
+          `[2]\nTitle: Second\nURL: https://example.com/2\nContent: ${bigBody}`,
+        metadata: {
+          sources: [
+            { id: 1, title: "First", url: "https://example.com/1", content: "first" },
+            { id: 2, title: "Second", url: "https://example.com/2", content: bigBody },
+          ],
+        },
+      }),
+    );
+    const { client } = createRecordingClient([...TOOL_CALL_EVENTS, ...DONE_ANSWER()]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("Tell me two things")],
+        tools: createRegistry(tool),
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    const sourcesEvent = events.find((event) => event.type === "sources");
+    // Only source 1's block entered the model's context, so the UI-facing sources
+    // event never claims source 2 was delivered.
+    expect(sourcesEvent).toMatchObject({ type: "sources", sources: [{ id: 1 }] });
   });
 });
