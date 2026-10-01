@@ -46,7 +46,9 @@ interface RecordedCall {
  * per call, splitting the flat event list at each `[DONE]` marker so each
  * chunk gets exactly its own events (as a real provider would).
  * Records every call (config, messages, options) so tests can assert on each
- * round's request shape.
+ * round's request shape. `messages` is snapshotted per call (by value), so a
+ * recorded round reflects exactly what the provider received at that moment
+ * rather than a reference to the orchestrator's mutable working-messages array.
  */
 function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   client: ProviderClient;
@@ -71,7 +73,12 @@ function createRecordingClient(sse: Array<string | Record<string, unknown>>): {
   const client = {
     chat: vi.fn(),
     chatStream: vi.fn((_config: ProviderConfig, _messages: unknown, _options?: unknown) => {
-      calls.push({ config: _config, messages: _messages, options: _options });
+      // Snapshot the request by value so each recorded round reflects exactly
+      // what the provider received at that moment, not a reference to the
+      // orchestrator's working-messages array (which keeps mutating across
+      // rounds). Without this, every `calls[n].messages` would end up pointing
+      // at the final, fully-accumulated state.
+      calls.push({ config: _config, messages: structuredClone(_messages), options: _options });
       return sseStream(rounds[round++] ?? []);
     }),
   } as unknown as ProviderClient;
@@ -1351,15 +1358,6 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
   const webResult = (id: number, pad = 800): string =>
     `${WEB_SEARCH_MARKER}\n\n[${id}]\nTitle: Result ${id}\nURL: https://example.com/${id}\nContent: ${"c".repeat(pad)}`;
 
-  // The recording client captures the working-messages array by reference, so
-  // every recorded round ends up reflecting the *final* accumulated state. A
-  // three-tool turn leaves [user, ac1, tr1, ac2, tr2, ac3, tr3]; the tool
-  // results are read from the tail array at those fixed odd-even positions.
-  const toolResultAt = (
-    messages: Array<{ role?: string; content?: string; tool_call_id?: string; tool_calls?: unknown }>,
-    index: number,
-  ) => messages[index];
-
   it("shares one finite cumulative budget across a three-tool chain", async () => {
     const results = [webResult(1), webResult(2), webResult(3)];
     let callIndex = 0;
@@ -1380,14 +1378,12 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
       }),
     );
 
-    // The final round carries the fully accumulated working messages.
-    const finalMessages = calls[calls.length - 1].messages as Array<{
-      role: string;
-      content?: string;
-    }>;
-    const tr1 = toolResultAt(finalMessages, 2);
-    const tr2 = toolResultAt(finalMessages, 4);
-    const tr3 = toolResultAt(finalMessages, 6);
+    // With a per-request snapshot each recorded call reflects the exact state
+    // sent that round: round 2 carries [user, ac1, tr1], round 3 adds tr2, and
+    // round 4 adds tr3. The tool results sit at fixed indices within each round.
+    const tr1 = (calls[1]?.messages as Array<{ content?: string }>)[2];
+    const tr2 = (calls[2]?.messages as Array<{ content?: string }>)[4];
+    const tr3 = (calls[3]?.messages as Array<{ content?: string }>)[6];
 
     // Tool 1: plenty of room after the fixed content, the whole result fits.
     expect(tr1?.content).toBe(webResult(1));
@@ -1403,7 +1399,8 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
     // room than the previous one, and the final request stays within the
     // configured context target according to the project's estimator.
     expect((tr1?.content ?? "").length).toBeGreaterThan((tr2?.content ?? "").length);
-    expect(estimateTokens(JSON.stringify(finalMessages))).toBeLessThanOrEqual(1024);
+    // The final request (round 4) stays within the configured context target.
+    expect(estimateTokens(JSON.stringify(calls[3]?.messages))).toBeLessThanOrEqual(1024);
   });
 
   it("lets a prior assistant tool_call with large arguments shrink the next result", async () => {
@@ -1421,9 +1418,9 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
           contextSizeTokens: 1024,
         }),
       );
-      // Final state: [user, ac1, tr1].
-      const finalMessages = calls[calls.length - 1].messages as Array<{ content?: string }>;
-      return toolResultAt(finalMessages, 2)?.content ?? "";
+      // Round 2 carries [user, ac1, tr1]; the tool result is at index 2.
+      const round2 = calls[1]?.messages as Array<{ content?: string }>;
+      return round2[2]?.content ?? "";
     };
 
     const smallArgsResult = await run("{}");
@@ -1455,14 +1452,15 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
       }),
     );
 
-    const finalMessages = calls[calls.length - 1].messages as Array<{
+    // Round 2 carries [user, ac1, tr1].
+    const round2 = calls[1]?.messages as Array<{
       role: string;
       content?: string;
       tool_calls?: unknown;
       tool_call_id?: unknown;
     }>;
-    const assistantCall = finalMessages.find((m) => m.role === "assistant");
-    const toolResult = finalMessages.find((m) => m.role === "tool");
+    const assistantCall = round2.find((m) => m.role === "assistant");
+    const toolResult = round2.find((m) => m.role === "tool");
     expect(assistantCall).toBeDefined();
     expect(assistantCall?.tool_calls).toHaveLength(1);
     expect(toolResult?.role).toBe("tool");
