@@ -1,10 +1,12 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { Mock } from "vitest"
 import {
   streamChat,
+  chat,
   isValidSourceUrl,
   sanitizeSourcesForDisplay,
   buildWebSearchPayload,
+  type RuntimeContext,
 } from "../chat"
 import { API_BASE } from "../apiBase"
 import type {
@@ -506,5 +508,83 @@ describe("buildWebSearchPayload", () => {
         maxResults: 3,
       }),
     ).toMatchObject({ provider: "tavily" })
+  })
+})
+
+describe("runtimeContext request serialization", () => {
+  const messages = [{ role: "user" as const, content: "hello" }]
+  const runtimeContext: RuntimeContext = { timeZone: "America/Montevideo", locale: "es-UY" }
+
+  /** Parse the JSON `body` sent to `fetch` into a plain object. */
+  function requestBodyOf(call: unknown[]): Record<string, unknown> {
+    const init = call[1] as { body: string }
+    return JSON.parse(init.body)
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  describe("streamChat()", () => {
+    it("serializes runtimeContext with exactly timeZone + locale when present", async () => {
+      vi.mocked(fetch).mockResolvedValue(okResponse(sseStream([])))
+
+      await streamChat(messages, provider, noopCallbacks() as unknown as StreamCallbacks, { runtimeContext })
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect(body.runtimeContext).toEqual({ timeZone: "America/Montevideo", locale: "es-UY" })
+    })
+
+    it("omits runtimeContext entirely when undefined", async () => {
+      vi.mocked(fetch).mockResolvedValue(okResponse(sseStream([])))
+
+      await streamChat(messages, provider, noopCallbacks() as unknown as StreamCallbacks)
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect("runtimeContext" in body).toBe(false)
+    })
+  })
+
+  describe("chat() (non-streaming)", () => {
+    const jsonOkResponse = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ success: true }),
+    } as unknown as Response
+
+    it("serializes runtimeContext with exactly timeZone + locale when present", async () => {
+      vi.mocked(fetch).mockResolvedValue(jsonOkResponse)
+
+      await chat(messages, provider, { runtimeContext })
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect(body.runtimeContext).toEqual({ timeZone: "America/Montevideo", locale: "es-UY" })
+    })
+
+    it("omits runtimeContext entirely when undefined", async () => {
+      vi.mocked(fetch).mockResolvedValue(jsonOkResponse)
+
+      await chat(messages, provider)
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect("runtimeContext" in body).toBe(false)
+    })
+
+    it("never sends a current date/time, offset, or weekday", async () => {
+      vi.mocked(fetch).mockResolvedValue(jsonOkResponse)
+
+      await chat(messages, provider, { runtimeContext })
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      const serialized = JSON.stringify(body.runtimeContext ?? {})
+      for (const forbidden of ["currenttime", "currentdate", "timestamp", "utcoffset", "weekday"]) {
+        expect(serialized.toLowerCase()).not.toContain(forbidden)
+      }
+    })
   })
 })

@@ -21,6 +21,7 @@ import type { Message } from "./types"
 import type { AttachedDocument } from "./services/files"
 import { FrontendApiError, type AppErrorArea } from "./types/error"
 import { isSecureTransport } from "./services/apiBase"
+import { buildRuntimeContext } from "./utils/runtimeContext"
 
 const messages = ref<Message[]>([])
 const loading = ref(false)
@@ -388,11 +389,16 @@ async function handleSend(text: string) {
       searchDepth: webSearchSettings.settings.value.searchDepth,
       maxResults: webSearchSettings.settings.value.maxResults,
     })
+    // Collected at request time so a long session reflects an environment
+    // timezone change. Omitted entirely when no usable IANA timezone is
+    // available; chat keeps working regardless.
+    const runtimeContext = buildRuntimeContext()
     await streamChat(allMessages, provider, callbacks, {
       signal,
       document,
       context,
       webSearch,
+      runtimeContext,
     })
   } catch (err) {
     // AbortError: onStopped or cleanup already handles state reset

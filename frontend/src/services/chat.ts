@@ -17,6 +17,17 @@ export interface ChatContext {
   maxTokens: number
 }
 
+/**
+ * Browser-derived presentation metadata (IANA timezone + locale). Sent with
+ * every chat request so the backend can render times in the user's locale.
+ * The authoritative current instant is generated server-side (Step 44), so
+ * this payload carries no date/time, offset, or weekday.
+ */
+export interface RuntimeContext {
+  timeZone: string
+  locale: string
+}
+
 export interface ChatRequest {
   messages: ChatMessage[]
   provider: {
@@ -27,6 +38,7 @@ export interface ChatRequest {
   }
   document?: ChatDocumentContext
   context?: ChatContext
+  runtimeContext?: RuntimeContext
 }
 
 export interface ChatResponse {
@@ -148,6 +160,7 @@ export async function streamChat(
     document?: ChatDocumentContext
     context?: ChatContext
     webSearch?: WebSearchRequestConfig
+    runtimeContext?: RuntimeContext
   },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
@@ -165,6 +178,11 @@ export async function streamChat(
     }
     if (options?.context) {
       requestBody.context = options.context
+    }
+    // Only include `runtimeContext` when present (e.g. a usable IANA
+    // timezone): omitting the field keeps the legacy request body intact.
+    if (options?.runtimeContext) {
+      requestBody.runtimeContext = options.runtimeContext
     }
     // Only include `webSearch` when enabled: omitting the field keeps the
     // legacy request body intact when the feature is unused.
@@ -394,14 +412,22 @@ export function sanitizeSourcesForDisplay(sources: unknown): WebSearchSource[] {
 export async function chat(
   messages: ChatMessage[],
   provider: ChatProviderConfig,
+  options?: {
+    runtimeContext?: RuntimeContext
+  },
 ): Promise<ChatResponse> {
   const apiUrl = `${API_BASE}/api/chat`
   let response: Response
   try {
+    const requestBody: Record<string, unknown> = { messages, provider }
+    // Same rule as `streamChat`: only include `runtimeContext` when present.
+    if (options?.runtimeContext) {
+      requestBody.runtimeContext = options.runtimeContext
+    }
     response = await fetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, provider }),
+      body: JSON.stringify(requestBody),
     })
   } catch {
     // fetch() rejected before producing a Response (network failure): normalize
