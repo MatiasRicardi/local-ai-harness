@@ -12,6 +12,20 @@ import {
   calculateToolResultBudget,
   truncateContentPreservingStructure,
 } from "../context/toolResultBudget.js";
+
+/**
+ * Estimate the tokens of a complete provider request message list.
+ *
+ * Serializes the messages to their stable JSON representation so the estimate
+ * accounts for everything actually sent to the provider — `role`, `content`,
+ * assistant `tool_calls` (name + arguments), tool call `id`s, tool names and
+ * the `role: "tool"` structure — not just the `content` fields. Not a real
+ * tokenizer: it reuses the shared character→token estimator over the JSON, which
+ * is deterministic and consistent with how the rest of the request is measured.
+ */
+function estimateProviderMessagesTokens(messages: ProviderRequestMessage[]): number {
+  return estimateTokens(JSON.stringify(messages));
+}
 import { validateToolCalls, type ResolvedToolCall } from "./toolCallValidation.js";
 import {
   WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
@@ -38,15 +52,29 @@ import {
 // the HTTP layer and from any tool configuration: callers inject an
 // already-configured registry. Step 31 owns wiring it into `/api/chat/stream`.
 //
-// NOTE (temporary, step 42): tool results are budgeted per-execution against
-// the full input budget. Step 42 makes the budget generic across multiple
-// accumulated results.
+// Tool results are budgeted per-execution against the full input budget, and
+// the budget is recomputed every time a new result is accumulated (step 42):
+// the fixed content of each round already includes every prior tool-call and
+// tool-result message, so a chain of tools shares one finite, cumulative input
+// budget instead of each getting an independent full-size allowance.
 
 /** Maximum number of model rounds in a single user turn (tools + final answer). */
 export const MAX_MODEL_ROUNDS = 4;
 
 /** Maximum number of executed tools in a single user turn. */
 export const MAX_TOOL_EXECUTIONS_PER_TURN = 3;
+
+/**
+ * Short, harness-controlled text sent as the `role: "tool"` body when a tool
+ * returned real content but the context budget left no room to include it.
+ * Distinct from a genuinely empty tool result so the model can tell "nothing
+ * was returned" apart from "the result was omitted because of context limits".
+ * Its token cost is always reserved inside the fixed budget (see
+ * {@link buildToolResultMessages}), so it never pushes the request over the
+ * configured context target.
+ */
+export const TOOL_RESULT_CONTEXT_OMISSION_TEXT =
+  "Tool result omitted: there is not enough context space to include this result.";
 
 /**
  * Input for a single orchestrated chat turn.
@@ -497,8 +525,11 @@ export class ChatOrchestrator {
    * already contains every prior round's tool interactions) is never displaced;
    * only the tool-result *body* is the thing budgeted/shrunk.
    *
-   * Reused for every tool execution in the multi-step loop (step 40); step 42
-   * will make the budget generic across multiple accumulated results.
+   * Reused for every tool execution in the multi-step loop. The budget is
+   * recomputed each round against the full request, so every prior tool-call and
+   * tool-result message counts against the room available to the next result
+   * (step 42): a chain of tools shares one finite, cumulative input budget
+   * instead of each getting an independent full-size allowance.
    */
   private async buildToolResultMessages(
     baseMessages: ProviderRequestMessage[],
@@ -506,56 +537,14 @@ export class ChatOrchestrator {
     result: ToolExecutionResult,
     contextSizeTokens?: number,
   ): Promise<{ assistantMessage: ProviderRequestMessage; toolResultMessage: ProviderRequestMessage; delivered: Set<number> }> {
-    const webContent = result.content;
+    const toolContent = result.content;
 
-    // Fixed content: the base conversation (all prior rounds) plus the overhead
-    // of the two internal messages. The tool-result *body* is deliberately
-    // excluded so it is the only thing budgeted/shrunk.
-    // Only messages that carry `content` contribute to the conversation text;
-    // the assistant tool-call message (no `content`) is excluded from this
-    // token estimate — its overhead is accounted for separately below.
-    const conversationText = baseMessages
-      .map((message) => ("content" in message ? message.content : ""))
-      .join("\n");
-    const assistantToolCallText = JSON.stringify({
-      role: "assistant",
-      tool_calls: [
-        { id: call.id, type: "function", function: { name: call.function.name, arguments: call.function.arguments } },
-      ],
-    });
-    const toolResultStructureText = JSON.stringify({ role: "tool", tool_call_id: call.id });
-    const messageTokens = estimateTokens(
-      conversationText + assistantToolCallText + toolResultStructureText,
-    );
-
-    // Without a configured context window there is no budget to apply: keep the
-    // full web result. Only when `contextSizeTokens` is provided is the result
-    // budgeted and possibly truncated.
-    const budget =
-      contextSizeTokens === undefined
-        ? {
-            includedWebCharacters: webContent.length,
-            originalWebCharacters: webContent.length,
-            truncated: false,
-          }
-        : calculateToolResultBudget({
-            maxTokens: contextSizeTokens,
-            messageTokens,
-            webResultCharacters: webContent.length,
-          });
-    const toolResultContent = budget.truncated
-      ? truncateContentPreservingStructure(webContent, budget.includedWebCharacters)
-      : webContent;
-
-    // Report only the sources whose blocks are actually present in the (possibly
-    // truncated) content sent to the model, so the emitted `sources` event stays
-    // consistent with the delivered content. The set is derived from complete
-    // block boundaries, not from a substring search of the (untrusted) body.
-    const structuredSources = webContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
-      ? toStructuredSources(result.metadata?.sources)
-      : [];
-    const delivered = deliveredSourceIds(structuredSources, toolResultContent);
-
+    // The two internal messages we are about to append. The tool-result *body*
+    // is budgeted, so — until we know how much fits — we reserve the mandatory
+    // omission fallback as its content. Keeping the fallback inside the fixed
+    // estimate guarantees its token cost is never dropped out from under the
+    // budget: even when no room remains for the real payload, the final request
+    // stays within the configured context target.
     const assistantMessage: ProviderRequestMessage = {
       role: "assistant",
       tool_calls: [
@@ -566,6 +555,64 @@ export class ChatOrchestrator {
         },
       ],
     };
+    const fallbackToolResultMessage: ProviderRequestMessage = {
+      role: "tool",
+      tool_call_id: call.id,
+      content: TOOL_RESULT_CONTEXT_OMISSION_TEXT,
+    };
+
+    // Fixed content: the base conversation (all prior rounds, with their full
+    // tool-call/tool-result structure) plus the two internal messages above.
+    // The tool-result *body* is deliberately excluded so it is the only thing
+    // budgeted/shrunk. Estimating the messages as complete provider messages
+    // (not just their `content`) means prior assistant `tool_calls` and prior
+    // tool results genuinely count against the budget.
+    const fixedMessages: ProviderRequestMessage[] = [
+      ...baseMessages,
+      assistantMessage,
+      fallbackToolResultMessage,
+    ];
+    const messageTokens = estimateProviderMessagesTokens(fixedMessages);
+
+    // Without a configured context window there is no budget to apply: keep the
+    // full tool result. Only when `contextSizeTokens` is provided is the result
+    // budgeted and possibly truncated/omitted.
+    const budget =
+      contextSizeTokens === undefined
+        ? {
+            includedToolCharacters: toolContent.length,
+            originalToolCharacters: toolContent.length,
+            truncated: false,
+          }
+        : calculateToolResultBudget({
+            maxTokens: contextSizeTokens,
+            messageTokens,
+            toolResultCharacters: toolContent.length,
+          });
+
+    // Choose the actual tool-result body:
+    // - fits entirely  -> keep the real content (replacing the reserved fallback);
+    // - truncated       -> keep as much of the real content as fits, at a section
+    //                     boundary and preserving any structural header;
+    // - no room at all  -> keep the harness omission fallback (already reserved
+    //                     in `messageTokens`, so nothing extra is added).
+    const toolResultContent = budget.truncated
+      ? budget.includedToolCharacters > 0
+        ? truncateContentPreservingStructure(toolContent, budget.includedToolCharacters)
+        : TOOL_RESULT_CONTEXT_OMISSION_TEXT
+      : toolContent;
+
+    // Report only the sources whose blocks are actually present in the (possibly
+    // truncated or omitted) content sent to the model, so the emitted `sources`
+    // event stays consistent with the delivered content. The set is derived from
+    // complete block boundaries, not from a substring search of the (untrusted)
+    // body. When the payload was omitted, no block is present, so no source is
+    // reported as delivered.
+    const structuredSources = toolContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
+      ? toStructuredSources(result.metadata?.sources)
+      : [];
+    const delivered = deliveredSourceIds(structuredSources, toolResultContent);
+
     const toolResultMessage: ProviderRequestMessage = {
       role: "tool",
       tool_call_id: call.id,
