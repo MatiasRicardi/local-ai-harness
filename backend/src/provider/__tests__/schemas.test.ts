@@ -3,6 +3,9 @@ import {
   chatRequestSchema,
   chatDocumentContextSchema,
   webSearchSchema,
+  runtimeContextSchema,
+  MAX_TIMEZONE_LENGTH,
+  MAX_LOCALE_LENGTH,
 } from "../schemas.js";
 
 describe("chatDocumentContextSchema", () => {
@@ -280,5 +283,59 @@ describe("webSearchSchema is not reachable from the request as a base URL overri
     if (result.success) {
       expect("baseUrl" in result.data).toBe(false);
     }
+  });
+});
+
+describe("runtimeContextSchema", () => {
+  it("accepts a valid timezone and locale", () => {
+    const result = runtimeContextSchema.safeParse({
+      timeZone: "America/Montevideo",
+      locale: "es-UY",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an omitted runtimeContext (whole object is optional)", () => {
+    expect(runtimeContextSchema.safeParse(undefined).success).toBe(true);
+    expect(chatRequestSchema.safeParse({ provider: { baseUrl: "http://x/v1", model: "m" }, messages: [{ role: "user", content: "hi" }] }).success).toBe(true);
+  });
+
+  it("trims whitespace before validating", () => {
+    const result = runtimeContextSchema.safeParse({
+      timeZone: "  America/Montevideo  ",
+      locale: "  es-UY  ",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ timeZone: "America/Montevideo", locale: "es-UY" });
+    }
+  });
+
+  it("rejects empty or whitespace-only fields", () => {
+    expect(runtimeContextSchema.safeParse({ timeZone: "", locale: "es-UY" }).success).toBe(false);
+    expect(runtimeContextSchema.safeParse({ timeZone: "America/Montevideo", locale: "" }).success).toBe(false);
+    expect(runtimeContextSchema.safeParse({ timeZone: "   ", locale: "es-UY" }).success).toBe(false);
+  });
+
+  it("rejects an invalid IANA timezone", () => {
+    expect(runtimeContextSchema.safeParse({ timeZone: "Mars/Phobos", locale: "es-UY" }).success).toBe(false);
+  });
+
+  it("rejects a malformed locale", () => {
+    // A syntactically valid but non-existent tag is accepted by canonicalization;
+    // a truly malformed tag throws RangeError and is rejected.
+    expect(runtimeContextSchema.safeParse({ timeZone: "America/Montevideo", locale: "%" }).success).toBe(false);
+  });
+
+  it("rejects values longer than the configured length bounds", () => {
+    // Valid IANA timezones are short, so the bound is observed via the rejection
+    // path: a value one char over the max is rejected regardless of validity.
+    const overTimeZone = "America/" + "x".repeat(MAX_TIMEZONE_LENGTH);
+    const overLocale = "en-" + "x".repeat(MAX_LOCALE_LENGTH);
+
+    expect(runtimeContextSchema.safeParse({ timeZone: overTimeZone, locale: "es-UY" }).success).toBe(false);
+    expect(runtimeContextSchema.safeParse({ timeZone: "America/Montevideo", locale: overLocale }).success).toBe(false);
   });
 });

@@ -226,6 +226,17 @@ interface Message {
 }
 ```
 
+**Runtime context:** every chat request may carry an optional `runtimeContext`
+(`{ timeZone, locale }`) sent by the frontend. The backend treats it as
+presentation metadata only: it generates the authoritative current instant from
+its own clock (never a client-provided "now") and prepends a server-authored
+system message (`buildRuntimeContextMessage`) describing the UTC timestamp, the
+user's local date/time, timezone, UTC offset, weekday and locale. When
+`runtimeContext` is absent (older clients) a UTC-only message is sent and the
+user-local fields are reported as unavailable. The message is injected ahead of
+all conversation content (before web-search guidance, document context and the
+conversation), and its exact content is counted against the context budget.
+
 ## Chat data flow
 
 1. The user submits a message (optionally with an attached document).
