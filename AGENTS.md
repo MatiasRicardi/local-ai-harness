@@ -161,9 +161,7 @@ Branch from `main` as `feature/stepNN-description` (or `docs/…`, `fix/…`), o
 
 13. **No publish actions.** Do not create tags, bump versions, push, merge, open or close PRs, or publish a GitHub Release without explicit approval. Version bumps and release notes stay manual.
 
-13. **comments always in english** all the comments inside the code, commits and PRs must be in english.
-
-
+14. **comments always in english** all the comments inside the code, commits and PRs must be in english.
 
 ## Bash execution
 
