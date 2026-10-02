@@ -564,19 +564,23 @@ describe("chat endpoint", () => {
       const body = capturedBody!;
       const messages = body.messages as Array<{ role: string; content: string }>;
 
-      expect(messages.length).toBe(3);
-      // [0] = system policy (no document text)
+      // [0] = runtime context (always prepended), [1..3] = document + user.
+      expect(messages.length).toBe(4);
+      // [0] = server-authored runtime context system message
       expect(messages[0].role).toBe("system");
-      expect(messages[0].content).toContain("report.pdf");
-      expect(messages[0].content).toContain("untrusted reference material");
-      expect(messages[0].content).not.toContain("Quarterly Report");
-      // [1] = user message with document content
-      expect(messages[1].role).toBe("user");
-      expect(messages[1].content).toContain("Quarterly Report: Revenue increased by 20%");
-      expect(messages[1].content).toContain("<document>");
-      // [2] = actual user message
+      expect(messages[0].content).toContain("Current runtime context");
+      // [1] = system policy (no document text)
+      expect(messages[1].role).toBe("system");
+      expect(messages[1].content).toContain("report.pdf");
+      expect(messages[1].content).toContain("untrusted reference material");
+      expect(messages[1].content).not.toContain("Quarterly Report");
+      // [2] = user message with document content
       expect(messages[2].role).toBe("user");
-      expect(messages[2].content).toBe("What is the main conclusion?");
+      expect(messages[2].content).toContain("Quarterly Report: Revenue increased by 20%");
+      expect(messages[2].content).toContain("<document>");
+      // [3] = actual user message
+      expect(messages[3].role).toBe("user");
+      expect(messages[3].content).toBe("What is the main conclusion?");
     });
 
     it("does not include document context when document is omitted", async () => {
@@ -628,8 +632,16 @@ describe("chat endpoint", () => {
       const body = capturedBody!;
       const messages = body.messages as Array<{ role: string; content: string }>;
 
-      expect(messages.length).toBe(1);
-      expect(messages[0].role).toBe("user");
+      // [0] = runtime context (UTC-only, since no runtimeContext was sent),
+      // [1] = user message.
+      expect(messages.length).toBe(2);
+      // [0] = server-authored runtime context system message
+      expect(messages[0].role).toBe("system");
+      expect(messages[0].content).toContain("Current runtime context");
+      expect(messages[0].content).toContain("UTC timestamp");
+      // [1] = actual user message
+      expect(messages[1].role).toBe("user");
+      expect(messages[1].content).toBe("Hello");
     });
 
     it("rejects request with invalid document schema", async () => {
@@ -657,6 +669,186 @@ describe("chat endpoint", () => {
       const body = JSON.parse(response.body);
       expect(body.error.code).toBe("VALIDATION_ERROR");
       expect(body.error.message).toBe("The request contains invalid fields.");
+    });
+  });
+});
+
+// ── Runtime context integration tests ────────────────────────────────────────
+
+describe("runtime context integration", () => {
+  let app: ReturnType<typeof buildApp>;
+
+  afterEach(() => {
+    app?.close();
+  });
+
+  describe("non-streaming endpoint", () => {
+    it("prepends the runtime-context system message when runtimeContext is sent", async () => {
+      app = buildApp();
+
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockResponse = {
+        ok: true,
+        json: async () => ({
+          id: "chat-123",
+          object: "chat.completion",
+          created: Date.now(),
+          model: "test-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "It is noon" }, finish_reason: "stop" }],
+        }),
+      };
+      global.fetch = ((_: string, options: RequestInit) => {
+        capturedBody = JSON.parse(options.body as string) as Record<string, unknown>;
+        return mockResponse;
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "What time is it?" }],
+          runtimeContext: { timeZone: "America/Montevideo", locale: "es-UY" },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const messages = capturedBody!.messages as Array<{ role: string; content: string }>;
+      expect(messages[0].role).toBe("system");
+      expect(messages[0].content).toContain("Current runtime context:");
+      expect(messages[0].content).toContain("User timezone: America/Montevideo");
+      expect(messages[0].content).toContain("User locale: es-UY");
+      // The user message still follows.
+      expect(messages[1].role).toBe("user");
+      expect(messages[1].content).toBe("What time is it?");
+    });
+
+    it("prepends a UTC-only message when runtimeContext is omitted", async () => {
+      app = buildApp();
+
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockResponse = {
+        ok: true,
+        json: async () => ({
+          id: "chat-123",
+          object: "chat.completion",
+          created: Date.now(),
+          model: "test-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "Hi" }, finish_reason: "stop" }],
+        }),
+      };
+      global.fetch = ((_: string, options: RequestInit) => {
+        capturedBody = JSON.parse(options.body as string) as Record<string, unknown>;
+        return mockResponse;
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const messages = capturedBody!.messages as Array<{ role: string; content: string }>;
+      expect(messages[0].role).toBe("system");
+      expect(messages[0].content).toContain("Current runtime context:");
+      expect(messages[0].content).toContain("UTC timestamp:");
+      expect(messages[0].content).toContain("unavailable");
+      expect(messages[0].content).not.toContain("User timezone:");
+      expect(messages[1].role).toBe("user");
+    });
+
+    it("rejects an invalid runtimeContext with 400", async () => {
+      app = buildApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          runtimeContext: { timeZone: "Mars/Phobos", locale: "es-UY" },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe("streaming endpoint", () => {
+    const mockStream = new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+
+    // Returns an accessor read AFTER the request resolves: the provider fetch
+    // is async, so the captured array is populated during app.inject(), not at
+    // setup time.
+    function createProviderMessageCapture(): () => Array<{ role: string; content: string }> | null {
+      let captured: Array<{ role: string; content: string }> | null = null;
+      global.fetch = ((_url: string, options: RequestInit) => {
+        const body = JSON.parse(options.body as string) as Record<string, unknown>;
+        captured = body.messages as Array<{ role: string; content: string }>;
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: mockStream,
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        };
+      }) as unknown as typeof globalThis.fetch;
+      return () => captured;
+    }
+
+    it("prepends the runtime-context message in the no-tool streaming branch", async () => {
+      app = buildApp();
+      const getMessages = createProviderMessageCapture();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat/stream",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          runtimeContext: { timeZone: "America/Montevideo", locale: "es-UY" },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const messages = getMessages();
+      expect(messages).not.toBeNull();
+      expect(messages![0].role).toBe("system");
+      expect(messages![0].content).toContain("User timezone: America/Montevideo");
+      expect(messages![1].role).toBe("user");
+    });
+
+    it("sends the runtime message before the web-search guidance when tools are enabled", async () => {
+      app = buildApp();
+      const getMessages = createProviderMessageCapture();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat/stream",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          runtimeContext: { timeZone: "America/Montevideo", locale: "es-UY" },
+          webSearch: { enabled: true, provider: "tavily", apiKey: "test-key" },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const messages = getMessages();
+      expect(messages).not.toBeNull();
+      // [0] = runtime context, [1] = web-search guidance, [2] = user.
+      expect(messages![0].role).toBe("system");
+      expect(messages![0].content).toContain("Current runtime context:");
+      expect(messages![1].content).toContain("Web search is available");
+      expect(messages![2].content).toBe("Hello");
     });
   });
 });

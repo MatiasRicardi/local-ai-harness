@@ -11,6 +11,8 @@ import {
   buildDocumentContextMessage,
   buildDocumentContentMessage,
 } from "../utils/documentContext.js";
+import { buildRuntimeContextMessage } from "../utils/runtimeContext.js";
+import { composeSystemInstructions } from "../utils/systemInstructions.js";
 import { buildToolRegistry } from "../tools/buildToolRegistry.js";
 import {
   calculateContextBudget,
@@ -71,8 +73,13 @@ const chat: FastifyPluginAsync = async (server) => {
       throw normalizeError(result.error);
     }
 
-    const { provider, messages, document, context } = result.data;
+    const { provider, messages, document, context, runtimeContext } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
+
+    // Server-authored runtime context: the authoritative current instant plus
+    // the user's timezone/locale. Built from the backend clock per request; a
+    // client can never forge "now". Included in budgeting so its tokens count.
+    const runtimeContextMessage = buildRuntimeContextMessage(runtimeContext);
 
     // Determine context size (default 32768 if not provided)
     const contextSizeTokens = context?.maxTokens ?? 32768;
@@ -80,7 +87,7 @@ const chat: FastifyPluginAsync = async (server) => {
     // Calculate context budget before contacting provider
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: "",
+      systemInstructions: runtimeContextMessage.content,
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
@@ -109,7 +116,7 @@ const chat: FastifyPluginAsync = async (server) => {
     const documentForMessages = document
       ? { ...document, text: budgetResult.includedDocumentText }
       : undefined;
-    const allMessages = buildAllMessages(documentForMessages, messages);
+    const allMessages = [runtimeContextMessage, ...buildAllMessages(documentForMessages, messages)];
 
     // Built-in tools are only supported on the streaming endpoint. Detect tool
     // availability generically through the request-scoped registry (rather than
@@ -213,7 +220,7 @@ const chat: FastifyPluginAsync = async (server) => {
       throw normalizeError(result.error);
     }
 
-    const { provider, messages, document, context } = result.data;
+    const { provider, messages, document, context, runtimeContext } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
     // Determine context size (default 32768 if not provided)
@@ -224,12 +231,19 @@ const chat: FastifyPluginAsync = async (server) => {
     // prepends to the request sent to ChatOrchestrator.
     const webSearchGuidanceMessage = buildWebSearchGuidanceMessage();
 
-    // Calculate context budget before contacting provider
+    // Server-authored runtime context (see the non-streaming route): built from
+    // the backend clock per request and always sent, independent of web search.
+    const runtimeContextMessage = buildRuntimeContextMessage(runtimeContext);
+
+    // Calculate context budget before contacting provider. Budgeting mirrors
+    // exactly what is sent: the runtime message plus the web-search guidance
+    // only when the enabled-search branch actually prepends it.
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: result.data.webSearch?.enabled
-        ? webSearchGuidanceMessage.content
-        : "",
+      systemInstructions: composeSystemInstructions(
+        runtimeContextMessage.content,
+        !!result.data.webSearch?.enabled,
+      ),
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
@@ -311,6 +325,7 @@ const chat: FastifyPluginAsync = async (server) => {
         // registry is request-scoped. Internal tool-call/tool-result messages and
         // the search results never surface as visible assistant text.
         const orchestratedMessages = [
+          runtimeContextMessage,
           webSearchGuidanceMessage,
           ...allMessages,
         ];
@@ -372,7 +387,7 @@ const chat: FastifyPluginAsync = async (server) => {
           apiKey: provider.apiKey,
           timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
         },
-        allMessages,
+        [runtimeContextMessage, ...allMessages],
         { signal: clientDisconnect.signal },
       );
 

@@ -90,6 +90,79 @@ export const chatContextSchema = z.object({
 
 export type ChatContext = z.infer<typeof chatContextSchema>;
 
+// ── Runtime context schema ───────────────────────────────────────────────────
+
+/**
+ * Conservative upper bounds for the browser-derived runtime context fields.
+ * Applied before validation so a malformed/huge value cannot reach the
+ * timezone/locale validators or be interpolated into a system prompt.
+ */
+export const MAX_TIMEZONE_LENGTH = 100;
+export const MAX_LOCALE_LENGTH = 40;
+
+/**
+ * A timezone is valid when the runtime can build a formatter for it. Invalid
+ * IANA names throw `RangeError`, which we translate to a plain validation
+ * failure. No hand-written timezone allowlist is maintained.
+ */
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A locale is valid when the runtime can canonicalize it. Empty or malformed
+ * tags throw `RangeError`; syntactically valid but non-existent tags are
+ * accepted (canonicalization is the standard built-in mechanism the step asks
+ * for, not a registry lookup).
+ */
+function isValidLocale(value: string): boolean {
+  try {
+    Intl.getCanonicalLocales(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The browser-derived presentation metadata a client may attach to a chat
+ * request. Both fields are required and validated when the object is present;
+ * the whole object is optional so older clients keep working.
+ */
+export interface RuntimeContext {
+  timeZone: string;
+  locale: string;
+}
+
+/**
+ * Zod schema for the optional `runtimeContext` object. `.trim()` runs before
+ * the length and value checks so a whitespace-only or empty field is rejected,
+ * never silently accepted.
+ */
+export const runtimeContextSchema = z
+  .object({
+    timeZone: z
+      .string()
+      .trim()
+      .min(1, "timeZone must not be empty")
+      .max(MAX_TIMEZONE_LENGTH, `timeZone must not exceed ${MAX_TIMEZONE_LENGTH} characters`)
+      .refine(isValidTimeZone, { message: "timeZone must be a valid IANA timezone" }),
+    locale: z
+      .string()
+      .trim()
+      .min(1, "locale must not be empty")
+      .max(MAX_LOCALE_LENGTH, `locale must not exceed ${MAX_LOCALE_LENGTH} characters`)
+      .refine(isValidLocale, { message: "locale must be a valid locale" }),
+  })
+  .optional();
+
+export type RuntimeContextInput = z.infer<typeof runtimeContextSchema>; // RuntimeContext | undefined
+
 // ── Web search configuration schema ──────────────────────────────────────────
 
 /**
@@ -141,6 +214,7 @@ export const chatRequestSchema = z.object({
   document: chatDocumentContextSchema.optional(),
   context: chatContextSchema.optional(),
   webSearch: webSearchSchema.optional(),
+  runtimeContext: runtimeContextSchema,
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
