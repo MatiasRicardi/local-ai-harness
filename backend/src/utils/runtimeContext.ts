@@ -102,27 +102,27 @@ function formatUtcOffset(totalMinutes: number): string {
  * DST-aware. Derived purely from the runtime's `Intl` implementation — never
  * from the timezone name.
  *
- * Both instants are truncated to the minute so the subtraction is exact; the
- * result is normalized into the `(-12:00, +12:00]` window, which covers every
- * real offset (including the +14:00 Pacific line via the `-12:00` fold for
- * sub-UTC timezones).
+ * The local wall-clock Y/M/D/h/m parts are interpreted as a UTC instant and
+ * compared against the real instant, so the calendar-day rollover of zones
+ * east of +12:00 (e.g. Pacific/Kiritimati at +14:00) is accounted for. Both
+ * instants are truncated to the minute so the subtraction is exact, and the
+ * true offset is returned without folding into a ±12:00 window.
  */
 function getUtcOffsetMinutes(timeZone: string, now: Date): number {
-  const toMinutes = (tz: string): number => {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(now);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(now);
 
-    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
-    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
-    return hour * 60 + minute;
-  };
+  const num = (type: Intl.DateTimeFormatPartTypes): number =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
 
-  let diff = toMinutes(timeZone) - toMinutes("UTC");
-  if (diff > 12 * 60) diff -= 24 * 60;
-  if (diff < -12 * 60) diff += 24 * 60;
-  return diff;
+  const localAsUtc = Date.UTC(num("year"), num("month") - 1, num("day"), num("hour"), num("minute"));
+  const nowMinute = Math.floor(now.getTime() / 60_000) * 60_000;
+  return Math.round((localAsUtc - nowMinute) / 60_000);
 }

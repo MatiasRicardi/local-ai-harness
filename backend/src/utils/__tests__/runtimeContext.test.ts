@@ -88,6 +88,31 @@ describe("buildRuntimeContextMessage", () => {
     expect(kathmandu.content).toContain("- UTC offset: +05:45");
   });
 
+  it("reports the true offset for zones east of +12:00, past the Pacific date line", () => {
+    // Kiritimati (+14:00): at 2024-01-01T10:00:00Z the local wall clock is
+    // 2024-01-02 00:00. Reading only hour/minute would fold this to -10:00;
+    // the day rollover must be preserved as +14:00.
+    const kiritimati = buildRuntimeContextMessage(
+      { timeZone: "Pacific/Kiritimati", locale: "en-US" },
+      new Date("2024-01-01T10:00:00.000Z"),
+    );
+    expect(kiritimati.content).toContain("- UTC offset: +14:00");
+    expect(kiritimati.content).toContain("- User local date/time: 2024-01-02 00:00:00");
+
+    // Tongatapu (+13:00) and Chatham (+13:45 during DST) stay ahead of +12:00.
+    const tongatapu = buildRuntimeContextMessage(
+      { timeZone: "Pacific/Tongatapu", locale: "en-US" },
+      new Date("2024-01-01T10:00:00.000Z"),
+    );
+    expect(tongatapu.content).toContain("- UTC offset: +13:00");
+
+    const chatham = buildRuntimeContextMessage(
+      { timeZone: "Pacific/Chatham", locale: "en-NZ" },
+      new Date("2024-01-01T10:00:00.000Z"),
+    );
+    expect(chatham.content).toContain("- UTC offset: +13:45");
+  });
+
   it("reflects the injected clock in the UTC timestamp", () => {
     const a = buildRuntimeContextMessage(
       { timeZone: "America/Montevideo", locale: "es-UY" },
