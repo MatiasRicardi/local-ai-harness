@@ -128,6 +128,19 @@ describe("calculatorExpression — invalid expressions", () => {
     expect(() => evaluate("1e")).toThrow(CalculatorExpressionError);
     expect(() => evaluate(".")).toThrow(CalculatorExpressionError);
   });
+
+  it("rejects an exponent with no mantissa digits as malformed (not non-finite)", () => {
+    // Number(".e5") is NaN, but the stable error must be INVALID_EXPRESSION
+    // (malformed number), not NON_FINITE, since the mantissa has no digits.
+    expect(() => evaluate(".e5")).toThrow(CalculatorExpressionError);
+    try {
+      evaluate(".e5");
+    } catch (error) {
+      expect((error as CalculatorExpressionError).errorType).toBe(
+        CalculatorExpressionError.ErrorType.INVALID_EXPRESSION,
+      );
+    }
+  });
 });
 
 describe("calculatorExpression — limits", () => {

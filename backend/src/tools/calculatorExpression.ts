@@ -207,9 +207,14 @@ function readNumber(input: string, start: number): { value: string; next: number
   }
 
   const raw = input.slice(start, i);
-  if (!/[0-9]/.test(raw)) {
-    // A lone "." reached here: treat it as an unsupported token.
-    throw unsupportedCharacter();
+  const mantissa = raw.split(/[eE]/)[0];
+  if (!/[0-9]/.test(mantissa)) {
+    if (mantissa === raw) {
+      // A lone "." reached here: treat it as an unsupported token.
+      throw unsupportedCharacter();
+    }
+    // An exponent is present but the mantissa has no digits (e.g. ".e5").
+    throw invalidExpression("The expression contains a malformed number.");
   }
 
   return { value: raw, next: i };
