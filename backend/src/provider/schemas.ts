@@ -203,6 +203,27 @@ export const webSearchSchema = z
 
 export type WebSearchConfig = z.infer<typeof webSearchSchema>;
 
+// ── Built-in tool opt-in ─────────────────────────────────────────────────────
+
+/**
+ * Generic, request-scoped opt-in for built-in tools.
+ *
+ * Every field is optional and OFF by default: an omitted `tools` object, an
+ * empty object, or `calculator: false` all leave the tool unregistered; only
+ * `calculator: true` registers it. Kept intentionally small and forward-
+ * looking so new tools (e.g. `fetchUrl` in Step 50) can be added here without
+ * changing the call shape.
+ *
+ * Follows the default Zod `.strip()` behaviour of the request layer, so unknown
+ * fields are ignored rather than rejected — the API contract is not hardened in
+ * this step.
+ */
+export const toolsSchema = z.object({
+  calculator: z.boolean().optional(),
+});
+
+export type ToolsConfig = z.infer<typeof toolsSchema>;
+
 // ── Chat request schema ──────────────────────────────────────────────────────
 
 /**
@@ -214,6 +235,7 @@ export const chatRequestSchema = z.object({
   document: chatDocumentContextSchema.optional(),
   context: chatContextSchema.optional(),
   webSearch: webSearchSchema.optional(),
+  tools: toolsSchema.optional(),
   runtimeContext: runtimeContextSchema,
 });
 

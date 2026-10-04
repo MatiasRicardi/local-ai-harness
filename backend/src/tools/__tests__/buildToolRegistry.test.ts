@@ -78,6 +78,41 @@ describe("buildToolRegistry", () => {
     expect(second!.listDefinitions()).toHaveLength(1);
   });
 
+  it("returns undefined when calculator is the only requested tool but disabled/omitted", () => {
+    expect(buildToolRegistry({ tools: {} })).toBeUndefined();
+    expect(buildToolRegistry({ tools: { calculator: false } })).toBeUndefined();
+    expect(buildToolRegistry({})).toBeUndefined();
+  });
+
+  it("registers exactly calculator when tools.calculator is true", () => {
+    const registry = buildToolRegistry({ tools: { calculator: true } });
+
+    expect(registry).toBeDefined();
+    expect(registry!.listDefinitions().map((d) => d.name)).toEqual(["calculator"]);
+  });
+
+  it("offers web_search and calculator together in the same request-scoped registry", () => {
+    const registry = buildToolRegistry({
+      webSearch: webSearchEnabled,
+      tools: { calculator: true },
+    });
+
+    expect(registry).toBeDefined();
+    expect(registry!.listDefinitions().map((d) => d.name).sort()).toEqual([
+      "calculator",
+      "web_search",
+    ]);
+  });
+
+  it("creates a fresh registry on every build (calculator included)", () => {
+    const first = buildToolRegistry({ tools: { calculator: true } });
+    const second = buildToolRegistry({ tools: { calculator: true } });
+
+    expect(first).not.toBe(second);
+    expect(first!.listDefinitions()).toHaveLength(1);
+    expect(second!.listDefinitions()).toHaveLength(1);
+  });
+
   it("reads backend-owned base URL from configuration, not from the request", () => {
     buildToolRegistry({ webSearch: webSearchEnabled });
     // The provider was constructed with the backend config base URL and only the

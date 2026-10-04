@@ -776,6 +776,25 @@ describe("runtime context integration", () => {
 
       expect(response.statusCode).toBe(400);
     });
+
+    it("rejects tools.calculator on the non-streaming endpoint with 400", async () => {
+      app = buildApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          tools: { calculator: true },
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = response.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("VALIDATION_ERROR");
+      expect(body.error.message).toContain("Built-in tools");
+    });
   });
 
   describe("streaming endpoint", () => {
@@ -849,6 +868,44 @@ describe("runtime context integration", () => {
       expect(messages![0].content).toContain("Current runtime context:");
       expect(messages![1].content).toContain("Web search is available");
       expect(messages![2].content).toBe("Hello");
+    });
+
+    it("forwards tools.calculator to the provider request body", async () => {
+      app = buildApp();
+      let capturedTools: unknown = undefined;
+      global.fetch = ((_url: string, options: RequestInit) => {
+        const body = JSON.parse(options.body as string) as Record<string, unknown>;
+        capturedTools = body.tools;
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: mockStream,
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        };
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat/stream",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          tools: { calculator: true },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      // The request-scoped registry is flattened into provider-facing tool
+      // definitions (OpenAI wire shape); calculator must be offered to the model.
+      expect(Array.isArray(capturedTools)).toBe(true);
+      const definitions = capturedTools as Array<{
+        type: string;
+        function: { name: string };
+      }>;
+      expect(definitions).toHaveLength(1);
+      expect(definitions[0].type).toBe("function");
+      expect(definitions[0].function.name).toBe("calculator");
     });
   });
 });

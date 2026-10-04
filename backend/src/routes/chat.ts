@@ -124,13 +124,14 @@ const chat: FastifyPluginAsync = async (server) => {
     // the rejection itself keeps its documented v1.0.0 behavior.
     const toolRegistry = buildToolRegistry({
       webSearch: result.data.webSearch,
+      tools: result.data.tools,
     });
 
     if (toolRegistry) {
       throw new AppError({
         code: "VALIDATION_ERROR",
         statusCode: 400,
-        message: "Web search is only available on the streaming chat endpoint.",
+        message: "Built-in tools are only available on the streaming chat endpoint.",
       });
     }
 
@@ -316,6 +317,7 @@ const chat: FastifyPluginAsync = async (server) => {
     // decided from the registry itself, not from a per-tool flag.
     const toolRegistry = buildToolRegistry({
       webSearch: result.data.webSearch,
+      tools: result.data.tools,
     });
 
     try {
