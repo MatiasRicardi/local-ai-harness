@@ -131,15 +131,18 @@ export async function fetchUrl(
   rawUrl: string,
   options?: FetchUrlClientOptions,
 ): Promise<FetchUrlResponse> {
-  // Validate the initial destination before any network work. This throws
-  // FetchUrlPolicyError (never converted to AppError here).
-  const validated = await validateFetchUrlTarget(rawUrl);
-
-  // One timeout for the whole operation, combined with the caller signal.
+  // One timeout for the whole operation, including policy validation, created
+  // before any validation so a slow DNS lookup is bounded and caller
+  // cancellation is honoured during resolution too.
   const timeoutSignal = AbortSignal.timeout(FETCH_URL_TIMEOUT_MS);
   const signal = options?.signal
     ? AbortSignal.any([options.signal, timeoutSignal])
     : timeoutSignal;
+
+  // Validate the initial destination before any network work. This throws
+  // FetchUrlPolicyError (never converted to AppError here), or a client error
+  // if the operation is aborted/timed out while resolving.
+  const validated = await validateTargetWithSignal(rawUrl, signal, timeoutSignal);
 
   let currentUrl = validated.url;
   let redirectCount = 0;
@@ -168,6 +171,10 @@ export async function fetchUrl(
     if (!isRedirect) {
       return await readFinalResponse(response, currentUrl, timeoutSignal);
     }
+
+    // A redirect body is never read (we follow via the Location header). Cancel
+    // it so the connection is not held open while we resolve/validate the hop.
+    await response.body?.cancel().catch(() => undefined);
 
     const location = response.headers.get("location");
     if (!location) {
@@ -202,13 +209,58 @@ export async function fetchUrl(
 
     // Revalidate the redirect target BEFORE fetching it. This blocks a public
     // URL that redirects to a private/local destination. Throws
-    // FetchUrlPolicyError on a blocked target. The policy returns the normalized
-    // URL, which we use as the connection target.
-    const validatedRedirect = await validateFetchUrlTarget(nextUrl);
+    // FetchUrlPolicyError on a blocked target, or a client error if aborted.
+    // The policy returns the normalized URL, which we use as the connection
+    // target.
+    const validatedRedirect = await validateTargetWithSignal(
+      nextUrl,
+      signal,
+      timeoutSignal,
+    );
 
     currentUrl = validatedRedirect.url;
     redirectCount += 1;
   }
+}
+
+/**
+ * Validate a fetch-URL destination while racing the shared abort signal.
+ *
+ * The DNS/policy lookup can be slow, so it must not run unbounded: if the
+ * operation is cancelled or times out while resolving, the validation is
+ * abandoned and the cause is classified as `TIMEOUT` (the global timeout fired)
+ * or `USER_ABORT` (the caller cancelled). A blocked destination still surfaces
+ * as a {@link FetchUrlPolicyError}.
+ */
+function validateTargetWithSignal(
+  rawUrl: string,
+  signal: AbortSignal,
+  timeoutSignal: AbortSignal,
+): ReturnType<typeof validateFetchUrlTarget> {
+  // Classify the abort: the timeout signal aborts only on the global ceiling,
+  // so its abort means TIMEOUT; any other abort is a caller cancellation.
+  const abortError = () =>
+    timeoutSignal.aborted
+      ? toClientError(timeoutSignal.reason, timeoutSignal)
+      : new FetchUrlClientError(
+          FetchUrlClientError.ErrorType.USER_ABORT,
+          "Fetch URL was cancelled",
+        );
+
+  let rejectAbort!: (reason: unknown) => void;
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => rejectAbort(abortError());
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  const validation = signal.aborted
+    ? Promise.reject(abortError())
+    : validateFetchUrlTarget(rawUrl);
+
+  return Promise.race([validation, aborted]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+  });
 }
 
 /**
@@ -224,6 +276,9 @@ async function readFinalResponse(
   // a handled redirect) is a safe HTTP error carrying the status code; the
   // remote error body is never included in the message.
   if (!response.ok) {
+    // The body is never read on this error path; cancel it so the connection
+    // is released instead of left idle.
+    await response.body?.cancel().catch(() => undefined);
     throw new FetchUrlClientError(
       FetchUrlClientError.ErrorType.HTTP_ERROR,
       `Fetch URL returned HTTP ${response.status}`,
@@ -233,6 +288,9 @@ async function readFinalResponse(
 
   const contentType = normalizeContentType(response.headers.get("content-type"));
   if (contentType === null || !isAllowedContentType(contentType)) {
+    // The body is never read on this error path; cancel it so the connection
+    // is released instead of left idle.
+    await response.body?.cancel().catch(() => undefined);
     throw new FetchUrlClientError(
       FetchUrlClientError.ErrorType.UNSUPPORTED_CONTENT_TYPE,
       contentType
@@ -250,6 +308,9 @@ async function readFinalResponse(
     ? Number.parseInt(contentLengthHeader, 10)
     : Number.NaN;
   if (!Number.isNaN(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    // The body is never read on this error path; cancel it so the connection
+    // is released instead of left idle.
+    await response.body?.cancel().catch(() => undefined);
     throw new FetchUrlClientError(
       FetchUrlClientError.ErrorType.RESPONSE_TOO_LARGE,
       "Fetch URL response is larger than the maximum allowed size",

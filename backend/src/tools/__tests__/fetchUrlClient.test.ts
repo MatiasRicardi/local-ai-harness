@@ -412,6 +412,145 @@ describe("fetchUrl — timeout and cancellation", () => {
   });
 });
 
+describe("fetchUrl — validation races the abort signal", () => {
+  it("aborts a slow initial validation as USER_ABORT", async () => {
+    // The validation never resolves; a caller abort must abandon it. Before the
+    // signal was wired into validation this hung past cancellation.
+    mockedValidate.mockImplementation(() => new Promise<never>(() => undefined));
+    const controller = new AbortController();
+    const promise = fetchUrl("https://example.com/slow", { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.USER_ABORT,
+    });
+  });
+
+  it("times out a slow initial validation as TIMEOUT", async () => {
+    mockedValidate.mockImplementation(() => new Promise<never>(() => undefined));
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      realTimeout(Math.min(ms, 5)),
+    );
+
+    await expect(fetchUrl("https://example.com/slow")).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.TIMEOUT,
+    });
+  });
+
+  it("aborts a slow redirect validation as USER_ABORT", async () => {
+    // First hop passes and returns a redirect; the second validation hangs.
+    let first = true;
+    mockedValidate.mockImplementation(async (url: string) => {
+      if (first) {
+        first = false;
+        return { url, hostname: new URL(url).hostname, addresses: ["93.184.216.34"] };
+      }
+      return new Promise<never>(() => undefined);
+    });
+    const fetchMock = stubFetch([
+      jsonResponse("redirect body", { location: "https://example.com/next" }, 302),
+      jsonResponse("should not happen"),
+    ]);
+    const controller = new AbortController();
+    const promise = fetchUrl("https://example.com/start", { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.USER_ABORT,
+    });
+    // Only the first hop happened: the second validation never resolved.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fetchUrl — body cleanup", () => {
+  it("cancels the redirect body before following the redirect", async () => {
+    mockedValidate.mockResolvedValue({
+      url: "https://example.com/next",
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
+    const redirect = jsonResponse("redirect body", { location: "https://example.com/next" }, 302);
+    const cancelSpy = vi.spyOn(redirect.body!, "cancel").mockResolvedValue(undefined);
+    stubFetch([
+      redirect,
+      jsonResponse("ok", { "content-type": "text/plain" }, 200),
+    ]);
+
+    await fetchUrl("https://example.com/start");
+
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the final body on an HTTP error", async () => {
+    mockedValidate.mockResolvedValue({
+      url: "https://example.com/missing",
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
+    const res = jsonResponse("error body", { "content-type": "text/plain" }, 404);
+    const cancelSpy = vi.spyOn(res.body!, "cancel").mockResolvedValue(undefined);
+    stubFetch(res);
+
+    await expect(fetchUrl("https://example.com/missing")).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.HTTP_ERROR,
+    });
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the final body on an unsupported content type", async () => {
+    mockedValidate.mockResolvedValue({
+      url: "https://example.com/binary",
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
+    const res = jsonResponse("binary", { "content-type": "application/octet-stream" }, 200);
+    const cancelSpy = vi.spyOn(res.body!, "cancel").mockResolvedValue(undefined);
+    stubFetch(res);
+
+    await expect(fetchUrl("https://example.com/binary")).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.UNSUPPORTED_CONTENT_TYPE,
+    });
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the final body when the declared size exceeds the limit", async () => {
+    mockedValidate.mockResolvedValue({
+      url: "https://example.com/huge",
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
+    const res = jsonResponse(
+      "tiny",
+      { "content-length": String(MAX_RESPONSE_BYTES + 1) },
+      200,
+    );
+    const cancelSpy = vi.spyOn(res.body!, "cancel").mockResolvedValue(undefined);
+    stubFetch(res);
+
+    await expect(fetchUrl("https://example.com/huge")).rejects.toMatchObject({
+      errorType: FetchUrlClientError.ErrorType.RESPONSE_TOO_LARGE,
+    });
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a body that is read", async () => {
+    mockedValidate.mockResolvedValue({
+      url: "https://example.com/page",
+      hostname: "example.com",
+      addresses: ["93.184.216.34"],
+    });
+    const res = jsonResponse("hello world", { "content-type": "text/plain" }, 200);
+    const cancelSpy = vi.spyOn(res.body!, "cancel").mockResolvedValue(undefined);
+    stubFetch(res);
+
+    await fetchUrl("https://example.com/page");
+
+    expect(cancelSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("fetchUrl — headers", () => {
   it("sends fixed harness headers without credentials", async () => {
     mockedValidate.mockResolvedValue({
