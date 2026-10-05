@@ -5,6 +5,7 @@ import {
   createWebSearchTool,
   type WebSearchToolConfig,
 } from "./webSearchTool.js";
+import { createCalculatorTool } from "./calculatorTool.js";
 import { createToolRegistry } from "./registry.js";
 import type { ToolRegistry } from "./types.js";
 
@@ -27,6 +28,15 @@ const WEB_SEARCH_DEFAULT_SEARCH_DEPTH = "basic" as const;
  */
 export interface BuildToolRegistryOptions {
   readonly webSearch?: WebSearchConfig;
+  /**
+   * Opt-in built-in tool switches. Every field is optional and off by default;
+   * an omitted/`undefined` field means the tool is not registered for that
+   * request. The set grows as new tools are added (e.g. `fetchUrl` in Step 50)
+   * without changing the call shape.
+   */
+  readonly tools?: Readonly<{
+    readonly calculator?: boolean;
+  }>;
 }
 
 /**
@@ -66,6 +76,10 @@ export function buildToolRegistry(
     };
 
     registry.register(createWebSearchTool(toolConfig, provider));
+  }
+
+  if (options.tools?.calculator) {
+    registry.register(createCalculatorTool());
   }
 
   // The invariant this factory guarantees: it never returns an empty registry.

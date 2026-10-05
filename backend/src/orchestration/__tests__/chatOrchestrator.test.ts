@@ -3,6 +3,7 @@ import { ChatOrchestrator, TOOL_RESULT_CONTEXT_OMISSION_TEXT } from "../chatOrch
 import type { ProviderClient } from "../../provider/types.js";
 import type { ProviderConfig } from "../../provider/schemas.js";
 import type { Tool, ToolRegistry } from "../../tools/types.js";
+import { createCalculatorTool } from "../../tools/calculatorTool.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../../provider/client.js";
 import { AppError } from "../../utils/errorHandler.js";
 import { estimateTokens } from "../../context/token-estimate.js";
@@ -1502,5 +1503,107 @@ describe("ChatOrchestrator — step 42 multi-result budgeting", () => {
     // Only source 1's block entered the model's context, so the UI-facing sources
     // event never claims source 2 was delivered.
     expect(sourcesEvent).toMatchObject({ type: "sources", sources: [{ id: 1 }] });
+  });
+});
+
+// ── Step 46 — calculator tool orchestration integration ────────────────────────
+
+const CALCULATOR_TOOL_CALL_EVENTS = [
+  { choices: [{ delta: { content: "Let me compute that." } }] },
+  {
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_calc",
+              type: "function",
+              function: {
+                name: "calculator",
+                arguments: '{"expression":"2 + 3 * 4"}',
+              },
+            },
+          ],
+        },
+      },
+    ],
+  },
+  { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+  "[DONE]",
+];
+
+describe("ChatOrchestrator — calculator tool integration (Step 46)", () => {
+  it("runs calculator through the generic lifecycle, then flushes the buffered answer", async () => {
+    // The real calculator tool: no external provider, no Tavily. Spy on execute
+    // (keeping its real implementation) so we can assert the call without a
+    // provider or Tavily dependency.
+    const tool = createCalculatorTool();
+    const executeSpy = vi.spyOn(tool, "execute");
+    const { client } = createRecordingClient([
+      ...CALCULATOR_TOOL_CALL_EVENTS,
+      { choices: [{ delta: { content: "The answer is 14." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      "[DONE]",
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("what is 2 + 3 * 4")],
+        tools: createRegistry(tool),
+      }),
+    );
+
+    // Generic lifecycle for calculator, then the buffered plain-text answer.
+    expect(events).toEqual([
+      { type: "tool_start", name: "calculator" },
+      { type: "tool_end", name: "calculator" },
+      { type: "sources", sources: [] },
+      { type: "delta", text: "The answer is 14." },
+      { type: "done" },
+    ]);
+
+    // Executed once, with parsed args, through the real engine implementation.
+    expect(executeSpy).toHaveBeenCalledTimes(1);
+    expect(executeSpy).toHaveBeenCalledWith({ expression: "2 + 3 * 4" }, { signal: undefined });
+  });
+
+  it("rejects an invalid calculator expression before tool_start", async () => {
+    const tool = createCalculatorTool();
+    const { client } = createRecordingClient([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_calc",
+                  type: "function",
+                  function: {
+                    name: "calculator",
+                    arguments: '{"expression":"2 +"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      "[DONE]",
+    ]);
+
+    // The generator throws (VALIDATION_ERROR) before ever emitting tool_start.
+    await expect(
+      collect(
+        new ChatOrchestrator(client).stream({
+          providerConfig: CONFIG,
+          messages: [userMessage("compute 2 +")],
+          tools: createRegistry(tool),
+        }),
+      ),
+    ).rejects.toThrow(/Invalid calculator expression\./);
   });
 });
