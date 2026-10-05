@@ -177,6 +177,7 @@ describe("validateFetchUrlTarget — IP literal classification (no DNS)", () => 
     ["[fc00::1]", "unique-local IPv6"],
     ["[fe80::1]", "link-local IPv6"],
     ["[ff00::1]", "multicast IPv6"],
+    ["[2001:db8::1]", "documentation IPv6"],
     ["[::ffff:10.0.0.1]", "IPv4-mapped private"],
     ["[::ffff:127.0.0.1]", "IPv4-mapped loopback"],
   ])("rejects %s (%s)", async (host) => {
@@ -231,12 +232,14 @@ describe("validateFetchUrlTarget — DNS resolution classification", () => {
   it("rejects (safely) when DNS throws, without leaking the raw error", async () => {
     lookupSpy.mockRejectedValueOnce(new Error("getaddrinfo ENOTFOUND example.com"));
 
-    await expect(validateFetchUrlTarget("http://example.com/")).rejects.toMatchObject({
-      errorType: "DNS_RESOLUTION_FAILED",
-    });
-    await expect(validateFetchUrlTarget("http://example.com/")).rejects.not.toThrow(
-      /ENOTFOUND/,
+    // One call only: assert the error type and the safe message on the same
+    // rejection, so a leaked DNS message would actually fail the test.
+    const error = await validateFetchUrlTarget("http://example.com/").catch(
+      (e: unknown) => e,
     );
+    expect(error).toBeInstanceOf(FetchUrlPolicyError);
+    expect(error).toMatchObject({ errorType: "DNS_RESOLUTION_FAILED" });
+    expect((error as Error).message).not.toMatch(/ENOTFOUND/);
   });
 });
 

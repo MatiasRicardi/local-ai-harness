@@ -392,6 +392,10 @@ function isPublicIPv6(ip: string): boolean {
   const value = expandIPv6(ip);
   if (value === null) return false;
 
+  // 2001:db8::/32 is reserved for documentation (RFC 3849), not global routing.
+  // Its top 32 bits are exactly 0x20010db8; check it before the 2000::/3 check.
+  if ((value >> 96n) === 0x20010db8n) return false;
+
   // IPv4-mapped/compatible forms are handled upstream (isPublicMappedIPv6).
   // Global unicast 2000::/3 (top 3 bits == 001 == 1); everything else fails
   // closed, which inherently blocks ::, ::1, fc00::/7, fe80::/10, ff00::/8.
