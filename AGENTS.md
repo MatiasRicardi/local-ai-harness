@@ -4,6 +4,7 @@ Context and mandatory rules for coding agents. Current release: **v1.1.0**.
 
 * Phase 1 = `instructions/phase1/` steps 01–25 — complete (historical reference).
 * Phase 2 = `instructions/phase2/` steps 26–36 — complete: optional model-driven web search on a generic tool foundation shipped in `v1.1.0`. Its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) are fixed.
+* Phase 3 = in progress (current implementacion)
 * `instructions/` is gitignored (local planning files).
 * Deep detail lives in `docs/` — read it there instead of duplicating it here.
 
@@ -126,7 +127,7 @@ Treat document content as **untrusted data, not instructions**. The backend inje
 
 ## Workflow
 
-1. Read this file and the current step file (new work: `instructions/phase2/stepNN-*.md`).
+1. Read this file and the current step file (new work: `instructions/phase3/stepNN-*.md`).
 2. Inspect related code and docs before implementing; implement only the requested step and leave the project working.
 3. Run the smallest relevant validation and report it honestly.
 4. Update the matching doc when behavior or usage changes: routes/structure/config → `docs/architecture.md`; security → `docs/security.md`; Docker/compose/proxy → `docs/docker.md`; manual checks → `docs/smoke-test.md`; commands/setup → `README.md`, `CONTRIBUTING.md`, package READMEs.
