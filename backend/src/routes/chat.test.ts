@@ -907,6 +907,41 @@ describe("runtime context integration", () => {
       expect(definitions[0].type).toBe("function");
       expect(definitions[0].function.name).toBe("calculator");
     });
+
+    it("does not advertise web search for a calculator-only request", async () => {
+      app = buildApp();
+      let capturedMessages: unknown = undefined;
+      global.fetch = ((_url: string, options: RequestInit) => {
+        const body = JSON.parse(options.body as string) as Record<string, unknown>;
+        capturedMessages = body.messages;
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: mockStream,
+          headers: new Headers({ "content-type": "text/event-stream" }),
+        };
+      }) as unknown as typeof globalThis.fetch;
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/chat/stream",
+        payload: {
+          provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+          messages: [{ role: "user", content: "Hello" }],
+          tools: { calculator: true },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const messages = capturedMessages as Array<{ content: string }>;
+      // The model must not be told web search is available when it is not
+      // registered: an unregistered web_search call would be rejected as
+      // TOOL_NOT_FOUND by the orchestrator.
+      expect(messages.some((m) => m.content.includes("Web search is available"))).toBe(
+        false,
+      );
+    });
   });
 });
 

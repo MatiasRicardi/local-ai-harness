@@ -328,7 +328,9 @@ const chat: FastifyPluginAsync = async (server) => {
         // the search results never surface as visible assistant text.
         const orchestratedMessages = [
           runtimeContextMessage,
-          webSearchGuidanceMessage,
+          // Only tell the model web search is available when it is actually
+          // registered; a calculator-only request must not advertise it.
+          ...(result.data.webSearch?.enabled ? [webSearchGuidanceMessage] : []),
           ...allMessages,
         ];
 

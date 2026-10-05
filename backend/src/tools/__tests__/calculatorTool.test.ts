@@ -69,23 +69,22 @@ describe("calculator tool — invalid expression is rejected before tool_start",
   it("maps the rejection to a stable VALIDATION_ERROR without raw expression", () => {
     const tool = createCalculatorTool();
 
-    expect(() => tool.validate!({ expression: "2 +" })).toThrow(
-      /Invalid calculator expression\./,
-    );
+    let thrown: unknown;
+    try {
+      tool.validate!({ expression: "2 +" });
+    } catch (error) {
+      thrown = error;
+    }
 
-    expect(() => {
-      try {
-        tool.validate!({ expression: "2 +" });
-      } catch (error) {
-        expect(error).toBeInstanceOf(AppError);
-        const appError = error as AppError;
-        expect(appError.code).toBe("VALIDATION_ERROR");
-        expect(appError.statusCode).toBe(400);
-        // No raw expression, no stack trace, no parser internals.
-        expect(appError.userMessage).not.toContain("2 +");
-        expect(appError.userMessage).not.toContain("at ");
-      }
-    });
+    // Assert on the captured error so these checks actually run: the invalid
+    // expression is mapped to a stable VALIDATION_ERROR with a sanitized
+    // message. No raw expression, no stack trace, no parser internals.
+    expect(thrown).toBeInstanceOf(AppError);
+    const appError = thrown as AppError;
+    expect(appError.code).toBe("VALIDATION_ERROR");
+    expect(appError.statusCode).toBe(400);
+    expect(appError.userMessage).not.toContain("2 +");
+    expect(appError.userMessage).not.toContain("at ");
   });
 
   it("rejects an empty string argument", () => {
