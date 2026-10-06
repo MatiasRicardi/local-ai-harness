@@ -261,7 +261,10 @@ function extractXmlContent(content: string): string {
       // so an internal `>` never ends it early, while the `[...]` alternative
       // consumes the DOCTYPE internal subset (which may itself contain `>`).
       text = text.replace(/<!DOCTYPE\b(?:[^[\]>]|\[[^\]]*\])*>/gi, " ");
-      text = text.replace(new RegExp(`</[^\s>][^>]*>`, "gi"), "\n");
+      // Regex literal keeps the `\s` escape intact; a template literal would
+      // turn it into `s` and skip closing tags starting with `s` (e.g.
+      // `</section>`), joining adjacent sections with no separator.
+      text = text.replace(/<\/[^\s>][^>]*>/gi, "\n");
       text = stripHtmlTags(text);
       return decodeSupportedEntities(text);
     })

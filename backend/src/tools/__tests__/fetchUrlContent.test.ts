@@ -298,6 +298,19 @@ describe("extractFetchUrlContent — XML", () => {
 
     expect(result.text).toBe("hello");
   });
+
+  it("separates adjacent sections whose closing tags start with 's'", () => {
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "application/xml",
+        content: "<section>alpha</section><section>beta</section>",
+      }),
+    );
+
+    // Closing tags starting with `s` must still become newlines; otherwise the
+    // two sections join into "alphabeta" with no separator.
+    expect(result.text).toContain("alpha\nbeta");
+  });
 });
 
 describe("extractFetchUrlContent — no readable content", () => {
