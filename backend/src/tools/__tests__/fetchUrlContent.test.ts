@@ -356,16 +356,23 @@ describe("extractFetchUrlContent — extraction cap and surrogate safety", () =>
     );
 
     // A dangling high surrogate (one not followed by a low surrogate) means a
-    // surrogate pair was split by the truncation cut.
-    for (let i = 0; i < result.text.length; i++) {
-      const code = result.text.charCodeAt(i);
+    // surrogate pair was split by the truncation cut. Violations are counted and
+    // asserted once: asserting per code unit over ~200_000 units costs seconds
+    // and makes the test fail intermittently against the default 5s timeout.
+    const text = result.text;
+    let splitPairs = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
       if (code >= 0xd800 && code <= 0xdbff) {
-        expect(i + 1).toBeLessThan(result.text.length);
-        const next = result.text.charCodeAt(i + 1);
-        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        const next = i + 1 < text.length ? text.charCodeAt(i + 1) : Number.NaN;
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          splitPairs += 1;
+        }
       }
     }
-    expect(result.text.length).toBeLessThanOrEqual(MAX_EXTRACTED_CONTENT_CHARACTERS);
+
+    expect(splitPairs).toBe(0);
+    expect(text.length).toBeLessThanOrEqual(MAX_EXTRACTED_CONTENT_CHARACTERS);
   });
 
   it("keeps a complete surrogate pair that ends on a low surrogate at an even cut (title path)", () => {
