@@ -230,6 +230,9 @@ function prettyPrintOrNormalizeJson(content: string): string {
   }
 }
 
+const CDATA_OPEN = "<![CDATA[";
+const CDATA_CLOSE = "]]>";
+
 /**
  * Conservative XML/text normalization without an XML parser: drop comments and
  * processing instructions, turn closing element tags into newlines, strip the
@@ -237,13 +240,22 @@ function prettyPrintOrNormalizeJson(content: string): string {
  * never resolved (pure string processing cannot, and must not, do so).
  */
 function extractXmlContent(content: string): string {
-  let body = content;
-  body = body.replace(/<!--[\s\S]*?-->/g, " ");
-  body = body.replace(/<\?[\s\S]*?\?>/g, " ");
-  body = body.replace(/<![\s\S]*?>/g, " ");
-  body = body.replace(new RegExp(`</[^\s>][^>]*>`, "gi"), "\n");
-  body = stripHtmlTags(body);
-  body = decodeSupportedEntities(body);
+  const segments = content.split(/(<!\[CDATA\[[\s\S]*?\]\>)/g);
+  const body = segments
+    .map((segment, index) => {
+      if (index % 2 === 1) {
+        // Captured CDATA section: keep its body verbatim.
+        return segment.slice(CDATA_OPEN.length, -CDATA_CLOSE.length);
+      }
+      let text = segment;
+      text = text.replace(/<!--[\s\S]*?-->/g, " ");
+      text = text.replace(/<\?[\s\S]*?\?>/g, " ");
+      text = text.replace(/<![^\s\S]*?>/g, " ");
+      text = text.replace(new RegExp(`</[^\s>][^>]*>`, "gi"), "\n");
+      text = stripHtmlTags(text);
+      return decodeSupportedEntities(text);
+    })
+    .join("");
   return normalizeReadableText(body);
 }
 
@@ -291,8 +303,9 @@ function truncateSurrogateSafe(text: string, maxCodeUnits: number): string {
   }
   let result = text.slice(0, maxCodeUnits);
   const lastCodeUnit = result.charCodeAt(result.length - 1);
-  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdfff) {
-    // Dangling high surrogate at the cut: drop it.
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+    // Dangling high surrogate at the cut: drop it. A trailing low surrogate
+    // (0xdc00-0xdfff) completes a pair and must be preserved.
     result = result.slice(0, -1);
   }
   return result;

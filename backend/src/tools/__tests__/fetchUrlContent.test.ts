@@ -253,6 +253,28 @@ describe("extractFetchUrlContent — XML", () => {
     expect(xml).toContain("a");
     expect(rdf).toContain("b");
   });
+
+  it("preserves CDATA contents as literal text", () => {
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "application/xml",
+        content: "<r><![CDATA[hello]]></r>",
+      }),
+    );
+
+    expect(result.text).toBe("hello");
+  });
+
+  it("does not decode entities or strip markup inside CDATA", () => {
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "application/xml",
+        content: "<r><![CDATA[a & b < c]]></r>",
+      }),
+    );
+
+    expect(result.text).toBe("a & b < c");
+  });
 });
 
 describe("extractFetchUrlContent — no readable content", () => {
@@ -321,5 +343,29 @@ describe("extractFetchUrlContent — extraction cap and surrogate safety", () =>
       }
     }
     expect(result.text.length).toBeLessThanOrEqual(MAX_EXTRACTED_CONTENT_CHARACTERS);
+  });
+
+  it("keeps a complete surrogate pair that ends on a low surrogate at an even cut (title path)", () => {
+    // 300 emoji = 600 code units. The 300-code-unit cut lands exactly on a low
+    // surrogate that completes a pair; that trailing low surrogate must be
+    // preserved (dropping it would leave a dangling high surrogate).
+    const title = "\u{1F600}".repeat(300);
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "text/html",
+        content: `<html><head><title>${title}</title></head></html>`,
+      }),
+    );
+
+    expect(result.title).toBeDefined();
+    const truncated = result.title ?? "";
+    expect(truncated.length).toBe(MAX_TITLE_CHARACTERS);
+    for (let i = 0; i < truncated.length; i++) {
+      const code = truncated.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        expect(i + 1).toBeLessThan(truncated.length);
+        expect(truncated.charCodeAt(i + 1) >= 0xdc00).toBe(true);
+      }
+    }
   });
 });
