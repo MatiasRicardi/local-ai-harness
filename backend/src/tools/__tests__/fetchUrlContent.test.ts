@@ -275,6 +275,29 @@ describe("extractFetchUrlContent — XML", () => {
 
     expect(result.text).toBe("a & b < c");
   });
+
+  it("discards CDATA-like text that appears inside a comment", () => {
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "application/xml",
+        content: "<r><!-- inner <![CDATA[bad]]> --><![CDATA[good]]></r>",
+      }),
+    );
+
+    expect(result.text).toContain("good");
+    expect(result.text).not.toContain("bad");
+  });
+
+  it("removes a DOCTYPE declaration with an internal subset as a unit", () => {
+    const result = extractFetchUrlContent(
+      input({
+        contentType: "application/xml",
+        content: `<!DOCTYPE r [<!ENTITY x "value">]><r>hello</r>`,
+      }),
+    );
+
+    expect(result.text).toBe("hello");
+  });
 });
 
 describe("extractFetchUrlContent — no readable content", () => {

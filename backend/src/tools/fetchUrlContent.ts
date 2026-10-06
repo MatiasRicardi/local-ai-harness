@@ -234,23 +234,33 @@ const CDATA_OPEN = "<![CDATA[";
 const CDATA_CLOSE = "]]>";
 
 /**
- * Conservative XML/text normalization without an XML parser: drop comments and
- * processing instructions, turn closing element tags into newlines, strip the
- * remaining markup, decode basic entities, then normalize. External entities are
- * never resolved (pure string processing cannot, and must not, do so).
+ * Conservative XML/text normalization without an XML parser: tokenize comments
+ * and CDATA sections together (discard comments, preserve CDATA bodies), drop
+ * processing instructions and DOCTYPE declarations, turn closing element tags
+ * into newlines, strip the remaining markup, decode basic entities, then
+ * normalize. External entities are never resolved (pure string processing
+ * cannot, and must not, do so).
  */
 function extractXmlContent(content: string): string {
-  const segments = content.split(/(<!\[CDATA\[[\s\S]*?\]\>)/g);
+  // Tokenize comments and CDATA together so a CDATA-like marker inside a
+  // comment (e.g. `<![CDATA[bad]]>`) is not mistaken for a real section.
+  const segments = content.split(/(<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\>)/g);
   const body = segments
     .map((segment, index) => {
       if (index % 2 === 1) {
-        // Captured CDATA section: keep its body verbatim.
-        return segment.slice(CDATA_OPEN.length, -CDATA_CLOSE.length);
+        if (segment.startsWith(CDATA_OPEN)) {
+          // Genuine CDATA section: keep its body verbatim.
+          return segment.slice(CDATA_OPEN.length, -CDATA_CLOSE.length);
+        }
+        // Comment token: discard it without interpreting its contents.
+        return "";
       }
       let text = segment;
-      text = text.replace(/<!--[\s\S]*?-->/g, " ");
       text = text.replace(/<\?[\s\S]*?\?>/g, " ");
-      text = text.replace(/<![^\s\S]*?>/g, " ");
+      // Remove the DOCTYPE declaration as a unit: the body class excludes `>`
+      // so an internal `>` never ends it early, while the `[...]` alternative
+      // consumes the DOCTYPE internal subset (which may itself contain `>`).
+      text = text.replace(/<!DOCTYPE\b(?:[^[\]>]|\[[^\]]*\])*>/gi, " ");
       text = text.replace(new RegExp(`</[^\s>][^>]*>`, "gi"), "\n");
       text = stripHtmlTags(text);
       return decodeSupportedEntities(text);
