@@ -4,8 +4,8 @@ import type { ProviderConfig } from "../provider/schemas.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../provider/client.js";
 import { SseParser, type AccumulatedToolCall } from "../provider/sseParser.js";
 import type { ToolDefinition, ToolExecutionResult, ToolRegistry } from "../tools/types.js";
-import type { SourceRef } from "../tools/sourceSanitization.js";
-import { sanitizeSources } from "../tools/sourceSanitization.js";
+import { sanitizeSourceCandidate, type SourceRef } from "../tools/sourceSanitization.js";
+import { TurnSourceAccumulator, type DeliveredSource } from "./turnSources.js";
 import { normalizeError, AppError } from "../utils/errorHandler.js";
 import { estimateTokens } from "../context/token-estimate.js";
 import {
@@ -251,6 +251,12 @@ export class ChatOrchestrator {
     // final round is sent without tool definitions.
     let toolsAvailable = true;
 
+    // Turn-local cumulative source accumulator. Each tool execution merges its
+    // delivered sources here and the FULL accumulated list is re-emitted, so the
+    // UI (which replaces `message.sources` per event) never loses sources from
+    // earlier tools in the turn.
+    const turnSources = new TurnSourceAccumulator();
+
     // The loop is bounded by MAX_MODEL_ROUNDS on every iteration, so a fifth
     // round is structurally impossible regardless of how the control flow
     // branches below.
@@ -307,6 +313,7 @@ export class ChatOrchestrator {
         workingMessages,
         round.toolCalls,
         executionsByTool,
+        turnSources,
       );
       if (toolBlockedByPolicy) {
         toolsAvailable = false;
@@ -359,6 +366,7 @@ export class ChatOrchestrator {
     workingMessages: ProviderRequestMessage[],
     toolCalls: AccumulatedToolCall[],
     executionsByTool: Map<string, number>,
+    turnSources: TurnSourceAccumulator,
   ): AsyncGenerator<ChatOrchestrationEvent, boolean, unknown> {
     const { tool, call } = validateToolCalls(toolCalls, input.tools);
 
@@ -460,7 +468,7 @@ export class ChatOrchestrator {
 
     // Append the internal assistant tool-call / tool-result messages to the
     // working list (budgeting the tool-result body against the context window).
-    const { assistantMessage, toolResultMessage, delivered } =
+    const { assistantMessage, toolResultMessage, deliveredSources } =
       await this.buildToolResultMessages(
         workingMessages,
         call,
@@ -469,13 +477,15 @@ export class ChatOrchestrator {
       );
     workingMessages.push(assistantMessage, toolResultMessage);
 
-    // Emit the tool lifecycle tail: only the sources whose blocks actually
-    // entered the model's context (see {@link buildToolResultMessages}), so a
-    // source emitted to the UI but never sent to the model is not surfaced.
-    const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
+    // Emit the tool lifecycle tail. `buildToolResultMessages` returns only the
+    // sources actually delivered to the model; merge them into the turn-local
+    // accumulator and re-emit the COMPLETE cumulative list so the UI keeps every
+    // source from earlier tools in the turn (it replaces `message.sources` per
+    // event). A tool that adds no source (e.g. calculator) re-emits the existing
+    // accumulator unchanged, so prior sources are never dropped.
+    const accumulatedSources = turnSources.add(deliveredSources);
     yield { type: "tool_end", name: tool.definition.name };
-    yield { type: "sources", sources: deliveredSources };
+    yield { type: "sources", sources: accumulatedSources };
 
     // Executed normally (no policy block). The only other exits are the early
     // `return false` paths above and thrown errors.
@@ -536,7 +546,17 @@ export class ChatOrchestrator {
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
     contextSizeTokens?: number,
-  ): Promise<{ assistantMessage: ProviderRequestMessage; toolResultMessage: ProviderRequestMessage; delivered: Set<number> }> {
+  ): Promise<{
+    assistantMessage: ProviderRequestMessage;
+    toolResultMessage: ProviderRequestMessage;
+    /**
+     * The sources actually delivered to the model, as untrusted `{ title, url }`
+     * candidates with an optional stable id (web search keeps its model-visible
+     * block id; fetch_url omits it — the turn accumulator assigns it). The
+     * accumulator sanitizes, deduplicates and id-assigns these.
+     */
+    deliveredSources: DeliveredSource[];
+  }> {
     const toolContent = result.content;
 
     // The two internal messages we are about to append. The tool-result *body*
@@ -602,16 +622,47 @@ export class ChatOrchestrator {
         : TOOL_RESULT_CONTEXT_OMISSION_TEXT
       : toolContent;
 
-    // Report only the sources whose blocks are actually present in the (possibly
-    // truncated or omitted) content sent to the model, so the emitted `sources`
-    // event stays consistent with the delivered content. The set is derived from
-    // complete block boundaries, not from a substring search of the (untrusted)
-    // body. When the payload was omitted, no block is present, so no source is
-    // reported as delivered.
-    const structuredSources = toolContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
-      ? toStructuredSources(result.metadata?.sources)
-      : [];
-    const delivered = deliveredSourceIds(structuredSources, toolResultContent);
+    // The sources actually delivered to the model, as untrusted `{ title, url }`
+    // candidates with an optional stable id. Delivery is always derived from
+    // harness structure, never from a substring search of the untrusted body:
+    //   - web search: ids whose known `[id]` block fits the (budgeted) content;
+    //   - fetch url:  a single source, delivered iff at least some real page text
+    //                 (offset past the harness-authored header) entered the budget.
+    const deliveredSources: DeliveredSource[] = [];
+
+    if (typeof result.metadata?.sourceContentStart === "number") {
+      // fetch_url-style: one source, delivered iff real page text entered the
+      // budget (`includedToolCharacters` past the header offset). An omitted
+      // result (0 characters) or a header-only result (nothing past the header)
+      // yields no delivered source.
+      const contentStart = result.metadata.sourceContentStart;
+      if (budget.includedToolCharacters > contentStart) {
+        const candidate = sanitizeSourceCandidate(result.metadata.source);
+        if (candidate) {
+          deliveredSources.push(candidate);
+        }
+      }
+    } else {
+      // web_search-style: ids whose known `[id]` block actually entered the
+      // (possibly truncated or omitted) content sent to the model. The set is
+      // derived from complete block boundaries, not from a substring search of
+      // the (untrusted) body. When the payload was omitted, no block is present,
+      // so no source is reported as delivered.
+      const structuredSources = toolContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
+        ? toStructuredSources(result.metadata?.sources)
+        : [];
+      const deliveredIds = deliveredSourceIds(structuredSources, toolResultContent);
+      for (const source of structuredSources) {
+        if (deliveredIds.has(source.id)) {
+          const candidate = sanitizeSourceCandidate({ title: source.title, url: source.url });
+          if (candidate) {
+            // Preserve the model-visible web-search block id; the accumulator
+            // keeps it verbatim.
+            deliveredSources.push({ ...candidate, id: source.id });
+          }
+        }
+      }
+    }
 
     const toolResultMessage: ProviderRequestMessage = {
       role: "tool",
@@ -622,7 +673,7 @@ export class ChatOrchestrator {
     return {
       assistantMessage,
       toolResultMessage,
-      delivered,
+      deliveredSources,
     };
   }
 

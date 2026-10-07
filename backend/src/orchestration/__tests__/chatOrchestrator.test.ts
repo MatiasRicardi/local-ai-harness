@@ -1607,3 +1607,220 @@ describe("ChatOrchestrator — calculator tool integration (Step 46)", () => {
     ).rejects.toThrow(/Invalid calculator expression\./);
   });
 });
+
+// ── Cumulative turn-local sources (Step 50) ──────────────────────────────────
+describe("ChatOrchestrator — cumulative turn-local sources (Step 50)", () => {
+  const toolCallRound = (id: string, name = "web_search", args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text = "final") => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  const webSearchTool = (title: string, url: string, id = 1): Tool =>
+    createTool(
+      "web_search",
+      "result",
+      async () => ({
+        content: `${WEB_SEARCH_MARKER}\n\n[${id}]\nTitle: ${title}\nURL: ${url}\nContent: c`,
+        metadata: { sources: [{ id, title, url, content: "c" }] },
+      }),
+    );
+
+  // A fetch_url-style result: harness-authored header, real page text, footer.
+  // `contentStart` is the offset where the real page text begins
+  // (harness-authored). When it is past the whole content, nothing real entered
+  // the budget, so the source must NOT be delivered.
+  const buildFetchContent = (title: string, url: string): string => {
+    const body = `<page-content>real page text</page-content>`;
+    return (
+      `[BEGIN UNTRUSTED EXTERNAL WEB PAGE]\nTitle: ${title}\nURL: ${url}\n\n` +
+      body +
+      `\n[END UNTRUSTED EXTERNAL WEB PAGE]`
+    );
+  };
+  const fetchTool = (title: string, url: string, contentStart: number): Tool =>
+    createTool("fetch_url", "", async () => ({
+      content: buildFetchContent(title, url),
+      metadata: { source: { title, url }, sourceContentStart: contentStart },
+    }));
+
+  const twoSourcesEvent = (events: Array<{ type: string; sources?: unknown[] }>) =>
+    events.filter((e) => e.type === "sources");
+
+  it("re-emits the full cumulative list: web_search then fetch_url", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    registry.register(
+      fetchTool("Dogs", "https://example.com/dogs", "https://example.com/dogs".length + 20),
+    );
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // First tool (web_search): only its source.
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    // Second tool (fetch_url): the accumulator now carries BOTH, web_search id 1
+    // preserved and fetch_url assigned the next id (2).
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "Cats", url: "https://example.com/cats" },
+        { id: 2, title: "Dogs", url: "https://example.com/dogs" },
+      ],
+    });
+  });
+
+  it("keeps the earlier source when a later tool adds nothing (calculator)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    registry.register(createCalculatorTool());
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...CALCULATOR_TOOL_CALL_EVENTS,
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    // The calculator re-emits the existing accumulator unchanged (never []).
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+
+  it("deduplicates a fetch_url source that matches an earlier web_search url (fragment)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/page"));
+    registry.register(
+      fetchTool("Cats", "https://example.com/page#comments", "https://example.com/page#comments".length + 20),
+    );
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/page#comments"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // The fragment is the same page, so the accumulator keeps the first id only.
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/page" }],
+    });
+  });
+
+  it("delivers a fetch_url source only when real page text enters the budget", async () => {
+    // Round 1: web_search delivers its source. Round 2: fetch_url with the
+    // header offset PAST the whole content (nothing real entered the budget).
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    // Offset past the whole content: nothing real entered the budget.
+    const headerOnly = buildFetchContent("Dogs", "https://example.com/dogs").length + 100;
+    registry.register(fetchTool("Dogs", "https://example.com/dogs", headerOnly));
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // web_search present; the header-only fetch result yields no source, so the
+    // accumulator is unchanged (still just the web_search source).
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+
+  it("preserves the earlier source when a fetch_url result is omitted (no metadata)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    // A tool that returns the omission fallback with no source metadata: the
+    // orchestrator must not fabricate a source from it.
+    const omittedFetch = createTool("fetch_url", "", async () => ({
+      content: "(content omitted to protect the context window)",
+      metadata: undefined,
+    }));
+    registry.register(omittedFetch);
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+});
