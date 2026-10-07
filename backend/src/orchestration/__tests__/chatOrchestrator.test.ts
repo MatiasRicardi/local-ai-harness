@@ -7,6 +7,16 @@ import { createCalculatorTool } from "../../tools/calculatorTool.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../../provider/client.js";
 import { AppError } from "../../utils/errorHandler.js";
 import { estimateTokens } from "../../context/token-estimate.js";
+import {
+  calculateToolResultBudget,
+  truncateContentPreservingStructure,
+} from "../../context/toolResultBudget.js";
+import {
+  WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
+  formatSourceBlock,
+  type WebSearchSource,
+} from "../../tools/webSearchFormat.js";
+import { buildUntrustedPageWrapper } from "../../tools/fetchUrlTool.js";
 
 // The untrusted-content marker injected at the top of every web-search result.
 const WEB_SEARCH_MARKER =
@@ -1605,5 +1615,859 @@ describe("ChatOrchestrator — calculator tool integration (Step 46)", () => {
         }),
       ),
     ).rejects.toThrow(/Invalid calculator expression\./);
+  });
+});
+
+// ── Cumulative turn-local sources (Step 50) ──────────────────────────────────
+describe("ChatOrchestrator — cumulative turn-local sources (Step 50)", () => {
+  const toolCallRound = (id: string, name = "web_search", args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text = "final") => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  const webSearchTool = (title: string, url: string, id = 1): Tool =>
+    createTool(
+      "web_search",
+      "result",
+      async () => ({
+        content: `${WEB_SEARCH_MARKER}\n\n[${id}]\nTitle: ${title}\nURL: ${url}\nContent: c`,
+        metadata: { sources: [{ id, title, url, content: "c" }] },
+      }),
+    );
+
+  // A fetch_url-style result: harness-authored header, real page text, footer.
+  // `contentStart` is the offset where the real page text begins
+  // (harness-authored). When it is past the whole content, nothing real entered
+  // the budget, so the source must NOT be delivered.
+  const buildFetchContent = (title: string, url: string): string => {
+    const body = `<page-content>real page text</page-content>`;
+    return (
+      `[BEGIN UNTRUSTED EXTERNAL WEB PAGE]\nTitle: ${title}\nURL: ${url}\n\n` +
+      body +
+      `\n[END UNTRUSTED EXTERNAL WEB PAGE]`
+    );
+  };
+  const fetchTool = (title: string, url: string, contentStart: number): Tool =>
+    createTool("fetch_url", "", async () => ({
+      content: buildFetchContent(title, url),
+      metadata: { source: { title, url }, sourceContentStart: contentStart },
+    }));
+
+  const twoSourcesEvent = (events: Array<{ type: string; sources?: unknown[] }>) =>
+    events.filter((e) => e.type === "sources");
+
+  it("re-emits the full cumulative list: web_search then fetch_url", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    registry.register(
+      fetchTool("Dogs", "https://example.com/dogs", "https://example.com/dogs".length + 20),
+    );
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // First tool (web_search): only its source.
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    // Second tool (fetch_url): the accumulator now carries BOTH, web_search id 1
+    // preserved and fetch_url assigned the next id (2).
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "Cats", url: "https://example.com/cats" },
+        { id: 2, title: "Dogs", url: "https://example.com/dogs" },
+      ],
+    });
+  });
+
+  it("gives web_search a non-colliding id when fetch_url runs first, and rewrites the block", async () => {
+    // fetch_url runs first and takes id 1. A later web_search must NOT keep its
+    // own per-call `[1]` (which would collide with fetch_url's id 1 and make the
+    // model see two different sources both labeled `[1]`): the orchestrator
+    // allocates the next id from the shared counter and rewrites the model-
+    // visible block so the `[N]` the model sees matches the source metadata.
+    const registry = createRegistry();
+    registry.register(
+      fetchTool("Dogs", "https://example.com/dogs", "https://example.com/dogs".length + 20),
+    );
+    registry.register(webSearchTool("Cats", "https://example.com/cats", 1));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...toolCallRound("call_2", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // fetch_url takes id 1; web_search takes the next id from the shared counter.
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Dogs", url: "https://example.com/dogs" }],
+    });
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "Dogs", url: "https://example.com/dogs" },
+        { id: 2, title: "Cats", url: "https://example.com/cats" },
+      ],
+    });
+
+    // The model-visible web_search block carries the allocated id [2], never the
+    // colliding [1] it would have used from its own per-call sequence. The
+    // web_search tool result is appended after round 2, so it surfaces in the
+    // final-answer round's recorded request.
+    const toolResults = (calls[2].messages as Array<{
+      role: string;
+      content?: string;
+    }>).filter((message) => message.role === "tool");
+    const webResult = toolResults.at(-1);
+    expect(webResult?.content).toContain("[2]\nTitle: Cats");
+    expect(webResult?.content).not.toContain("[1]\nURL: https://example.com/cats");
+  });
+
+  it("keeps the earlier source when a later tool adds nothing (calculator)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    registry.register(createCalculatorTool());
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...CALCULATOR_TOOL_CALL_EVENTS,
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    // The calculator re-emits the existing accumulator unchanged (never []).
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+
+  it("deduplicates a fetch_url source that matches an earlier web_search url (fragment)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/page"));
+    registry.register(
+      fetchTool("Cats", "https://example.com/page#comments", "https://example.com/page#comments".length + 20),
+    );
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/page#comments"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // The fragment is the same page, so the accumulator keeps the first id only.
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/page" }],
+    });
+  });
+
+  it("delivers a fetch_url source only when real page text enters the budget", async () => {
+    // Round 1: web_search delivers its source. Round 2: fetch_url with the
+    // header offset PAST the whole content (nothing real entered the budget).
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    // Offset past the whole content: nothing real entered the budget.
+    const headerOnly = buildFetchContent("Dogs", "https://example.com/dogs").length + 100;
+    registry.register(fetchTool("Dogs", "https://example.com/dogs", headerOnly));
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // web_search present; the header-only fetch result yields no source, so the
+    // accumulator is unchanged (still just the web_search source).
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+
+  /** A web_search tool returning several results, each labeled with its own
+   * per-call id (the tool restarts its `[1]`, `[2]`, … sequence every call). */
+  const multiSearchTool = (
+    sources: Array<{ id: number; title: string; url: string; content?: string }>,
+  ): Tool =>
+    createTool(
+      "web_search",
+      "",
+      async () => ({
+        content:
+          `${WEB_SEARCH_MARKER}\n\n` +
+          sources
+            .map(
+              (s) =>
+                `[${s.id}]\nTitle: ${s.title}\nURL: ${s.url}\nContent: ${s.content ?? "snippet"}`,
+            )
+            .join("\n\n"),
+        metadata: {
+          sources: sources.map((s) => ({ ...s, content: s.content ?? "snippet" })),
+        },
+      }),
+    );
+
+  /** A fetch_url tool built with the REAL harness wrapper, so the
+   * `sourceContentStart` offset under test is the offset the tool really emits. */
+  const realFetchTool = (url: string, title: string, pageText: string): Tool =>
+    createTool(
+      "fetch_url",
+      "",
+      async () => {
+        const { wrapper, sourceContentStart } = buildUntrustedPageWrapper({
+          finalUrl: url,
+          title,
+          extractedText: pageText,
+        });
+        return {
+          content: wrapper,
+          metadata: { source: { title, url }, sourceContentStart },
+        };
+      },
+    );
+
+  /** Every `[N]` block label the model can see in a tool-result message. */
+  const sentLabels = (messages: unknown): number[] => {
+    const toolMessages = (messages as Array<{ role: string; content?: string }>).filter(
+      (message) => message.role === "tool",
+    );
+    const content = toolMessages.at(-1)?.content ?? "";
+    return [...content.matchAll(/^\[(\d+)\]$/gm)].map((match) => Number(match[1]));
+  };
+
+  /** The source ids of the `sources` event at `index`. */
+  const emittedIds = (events: Array<{ type: string; sources?: unknown[] }>, index: number) =>
+    (events[index]?.sources ?? []).map((source) => (source as { id: number }).id);
+
+  const sentToolContent = (messages: unknown): string => {
+    const toolMessages = (messages as Array<{ role: string; content?: string }>).filter(
+      (message) => message.role === "tool",
+    );
+    return toolMessages.at(-1)?.content ?? "";
+  };
+
+  it("labels every result of one search distinctly with matching source ids", async () => {
+    // The tool labels its three results [1], [2], [3]; the allocator must hand
+    // out three DISTINCT turn-local ids in one execution (an allocator that only
+    // reported the smallest free id without occupying it returned 1 every time),
+    // and the emitted source ids must equal the labels in the block body.
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        { id: 1, title: "A", url: "https://a.example/one" },
+        { id: 2, title: "B", url: "https://b.example/two" },
+        { id: 3, title: "C", url: "https://c.example/three" },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    expect(twoSourcesEvent(events)).toEqual([
+      {
+        type: "sources",
+        sources: [
+          { id: 1, title: "A", url: "https://a.example/one" },
+          { id: 2, title: "B", url: "https://b.example/two" },
+          { id: 3, title: "C", url: "https://c.example/three" },
+        ],
+      },
+    ]);
+    expect(sentLabels(calls[1].messages)).toEqual([1, 2, 3]);
+  });
+
+  it("continues a multi-result search after a fetch_url id instead of colliding", async () => {
+    // fetch_url takes id 1, so the three search results are rendered [2], [3],
+    // [4] — never [1], [2], [3], which would label the fetched page and the
+    // first search result with the same `[1]`.
+    const registry = createRegistry();
+    registry.register(
+      realFetchTool("https://x.example/page", "X", "real page text about x"),
+    );
+    registry.register(
+      multiSearchTool([
+        { id: 1, title: "A", url: "https://a.example/one" },
+        { id: 2, title: "B", url: "https://b.example/two" },
+        { id: 3, title: "C", url: "https://c.example/three" },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://x.example/page"}'),
+      ...toolCallRound("call_2", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    expect(twoSourcesEvent(events)[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "X", url: "https://x.example/page" },
+        { id: 2, title: "A", url: "https://a.example/one" },
+        { id: 3, title: "B", url: "https://b.example/two" },
+        { id: 4, title: "C", url: "https://c.example/three" },
+      ],
+    });
+    // Model-visible labels match the emitted ids exactly (the fetched page is a
+    // fetch_url body without a `[N]` label, so only the search blocks count).
+    expect(sentLabels(calls[2].messages)).toEqual([2, 3, 4]);
+  });
+
+  it("reuses the existing id when a later search returns an already fetched url", async () => {
+    // The headline desynchronization: fetch_url(A) is delivered as source 1, and
+    // a later web_search whose first result is the SAME page must be rendered
+    // with `[1]` too, instead of a fresh label the frontend never saw.
+    const url = "https://a.example/one";
+    const registry = createRegistry();
+    registry.register(realFetchTool(url, "A", "real page text about a"));
+    registry.register(
+      multiSearchTool([
+        { id: 1, title: "A (search)", url },
+        { id: 2, title: "B", url: "https://b.example/two" },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://a.example/one"}'),
+      ...toolCallRound("call_2", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    // One source per distinct page: the duplicate keeps the id it already had.
+    expect(twoSourcesEvent(events)[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "A", url: "https://a.example/one" },
+        { id: 2, title: "B", url: "https://b.example/two" },
+      ],
+    });
+    // And the model sees `[1]` for that search result, matching the SSE id.
+    expect(sentLabels(calls[2].messages)).toEqual([1, 2]);
+    expect(sentToolContent(calls[2].messages)).toContain("[1]\nTitle: A (search)");
+  });
+
+  it("withholds a fetch_url source when only the wrapper header reaches the model", async () => {
+    // A page whose extracted text is one huge section: the budget fits the
+    // harness header but not the `<page-content>` section, so the message the
+    // provider receives contains NO remote character and no source is delivered.
+    const hugeParagraph = "remote paragraph text without blank lines ".repeat(120);
+    const registry = createRegistry();
+    registry.register(realFetchTool("https://a.example/one", "A", hugeParagraph));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://a.example/one"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    const toolContent = sentToolContent(calls[1].messages);
+    // The harness prefix made it, the page text did not: no source is emitted
+    // even though the tool result is a non-empty wrapper.
+    expect(toolContent).toContain("[BEGIN UNTRUSTED EXTERNAL WEB PAGE]");
+    expect(toolContent).not.toContain("<page-content>");
+    expect(twoSourcesEvent(events)).toEqual([{ type: "sources", sources: [] }]);
+  });
+
+  it("emits a fetch_url source when truncation still delivered part of the page text", async () => {
+    // The same budget cuts the page after its first paragraph, so the message
+    // contains real remote text: the source must be reported even though the
+    // payload was truncated.
+    const pageText = `PARA-ONE-MARKER\n\n${"remote paragraph text without blank lines ".repeat(120)}`;
+    const registry = createRegistry();
+    registry.register(realFetchTool("https://a.example/one", "A", pageText));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://a.example/one"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    const toolContent = sentToolContent(calls[1].messages);
+    expect(toolContent).toContain("PARA-ONE-MARKER");
+    expect(toolContent.length).toBeLessThan(pageText.length);
+    expect(twoSourcesEvent(events)).toEqual([
+      { type: "sources", sources: [{ id: 1, title: "A", url: "https://a.example/one" }] },
+    ]);
+  });
+
+  it("emits no fetch_url source when the whole tool result is omitted", async () => {
+    const registry = createRegistry();
+    registry.register(realFetchTool("https://a.example/one", "A", "real page text about a"));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://a.example/one"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens: 1,
+      }),
+    );
+
+    expect(sentToolContent(calls[1].messages)).toBe(TOOL_RESULT_CONTEXT_OMISSION_TEXT);
+    expect(twoSourcesEvent(events)).toEqual([{ type: "sources", sources: [] }]);
+  });
+
+  it("drops a search payload whose first block does not fit instead of a stale label", async () => {
+    // The budget cannot fit the first complete block, so nothing of this payload
+    // is attributed: the `[1]` label of a source that is never delivered must not
+    // stay in front of the model (the id goes back to the allocator and a later
+    // tool in the same turn may label a different page with it).
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        {
+          id: 1,
+          title: "A",
+          url: "https://a.example/one",
+          content: "remote snippet without blank lines ".repeat(200),
+        },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens: 1024,
+      }),
+    );
+
+    const toolContent = sentToolContent(calls[1].messages);
+    expect(toolContent).toBe(TOOL_RESULT_CONTEXT_OMISSION_TEXT);
+    expect(sentLabels(calls[1].messages)).toEqual([]);
+    expect(twoSourcesEvent(events)).toEqual([{ type: "sources", sources: [] }]);
+  });
+
+  it("pays for the longer labels when ids cross from 9 to 10", async () => {
+    // Two search executions: the first takes ids 1-9, so the second one's blocks
+    // are renumbered from its own `[1]`, `[2]`, `[3]` into the two-digit `[10]`,
+    // `[11]`, `[12]`. Ids are reserved BEFORE the budget is measured, so the
+    // extra characters are paid for and the serialized request still fits the
+    // usable share of the configured context target.
+    const firstPage = Array.from({ length: 9 }, (_unused, index) => ({
+      title: `A${index + 1}`,
+      url: `https://a${index + 1}.example/`,
+    }));
+    const secondPage = [
+      { title: "B1", url: "https://b1.example/" },
+      { title: "B2", url: "https://b2.example/" },
+      { title: "B3", url: "https://b3.example/" },
+    ];
+
+    let executions = 0;
+    const searchOncePerRound = createTool(
+      "web_search",
+      "",
+      async () => {
+        executions += 1;
+        const sources = executions === 1 ? firstPage : secondPage;
+        return {
+          content:
+            `${WEB_SEARCH_MARKER}\n\n` +
+            sources
+              .map(
+                (source, index) =>
+                  `[${index + 1}]\nTitle: ${source.title}\nURL: ${source.url}\nContent: snippet`,
+              )
+              .join("\n\n"),
+          metadata: {
+            sources: sources.map((source, index) => ({
+              id: index + 1,
+              title: source.title,
+              url: source.url,
+              content: "snippet",
+            })),
+          },
+        };
+      },
+    );
+
+    const contextSizeTokens = 2048;
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: createRegistry(searchOncePerRound),
+        contextSizeTokens,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    expect(emittedIds(sourcesEvents, 0)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(emittedIds(sourcesEvents, 1)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+    // The second tool result is the last tool message of the final request.
+    const finalMessages = calls[2].messages as Array<{ role: string; content?: string }>;
+    expect(sentLabels(finalMessages)).toEqual([10, 11, 12]);
+    // No label is duplicated across the two tool results of the turn.
+    const allLabels = finalMessages
+      .filter((message) => message.role === "tool")
+      .flatMap((message) => [...(message.content ?? "").matchAll(/^\[(\d+)\]$/gm)])
+      .map((match) => Number(match[1]));
+    expect(new Set(allLabels).size).toBe(allLabels.length);
+    // The request the provider receives fits the usable share of the target.
+    expect(estimateTokens(JSON.stringify(finalMessages))).toBeLessThanOrEqual(
+      Math.floor(contextSizeTokens * 0.9),
+    );
+  });
+
+  it("preserves the earlier source when a fetch_url result is omitted (no metadata)", async () => {
+    const registry = createRegistry();
+    registry.register(webSearchTool("Cats", "https://example.com/cats"));
+    // A tool that returns the omission fallback with no source metadata: the
+    // orchestrator must not fabricate a source from it.
+    const omittedFetch = createTool("fetch_url", "", async () => ({
+      content: "(content omitted to protect the context window)",
+      metadata: undefined,
+    }));
+    registry.register(omittedFetch);
+    const { client } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...toolCallRound("call_2", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
+    });
+  });
+
+  /**
+   * Token estimate of everything the round request holds **except** the
+   * tool-result body: the base conversation, the assistant tool-call message and
+   * the mandatory omission fallback reserved as the tool result. This mirrors
+   * what `buildToolResultMessages` subtracts from the input budget, so a test can
+   * prove that the window it picked really leaves room for one block and not two
+   * instead of relying on a magic token count.
+   */
+  const fixedRoundTokens = (
+    baseMessages: unknown[],
+    call: { id: string; name: string; arguments: string },
+  ): number =>
+    estimateTokens(
+      JSON.stringify([
+        ...baseMessages,
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: call.id,
+              type: "function",
+              function: { name: call.name, arguments: call.arguments },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: call.id, content: TOOL_RESULT_CONTEXT_OMISSION_TEXT },
+      ]),
+    );
+
+  /**
+   * The model-facing payload the orchestrator renders once every block carries
+   * its final (reserved) id: the untrusted marker and the blocks joined by a
+   * blank line. Blocks are passed with the id they end up with, so a duplicate
+   * URL appears twice with the same `[N]` label.
+   */
+  const renderedSearchPayload = (blocks: readonly WebSearchSource[]): string =>
+    `${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${blocks.map(formatSourceBlock).join("\n\n")}`;
+
+  it("delivers only the blocks that fit when two results share one normalized URL", async () => {
+    // Two results of a single search whose normalized URLs are equal (only the
+    // fragment differs, and the fragment is dropped for dedup) share ONE stable
+    // id, so both model-facing blocks are labeled `[1]` and the SSE list carries
+    // a single source. Source ids therefore cannot say WHICH block entered the
+    // context: the budget below fits the first block but not the second, and a
+    // delivery set keyed by id would report both as delivered and let the
+    // re-render reinsert the dropped duplicate block.
+    const contextSizeTokens = 1024;
+    const firstBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#first",
+      content: "first result body",
+    };
+    const secondBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#second",
+      content: "second result body ".repeat(200),
+    };
+    const payload = renderedSearchPayload([firstBlock, secondBlock]);
+
+    const oneBlockCharacters =
+      WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length +
+      "\n\n".length +
+      formatSourceBlock(firstBlock).length;
+    const twoBlockCharacters =
+      oneBlockCharacters + "\n\n".length + formatSourceBlock(secondBlock).length;
+    const budget = calculateToolResultBudget({
+      maxTokens: contextSizeTokens,
+      messageTokens: fixedRoundTokens([userMessage("x")], {
+        id: "call_1",
+        name: "web_search",
+        arguments: "{}",
+      }),
+      toolResultCharacters: payload.length,
+    });
+    // The window under test really is the intended one: one whole block fits and
+    // the second one does not.
+    expect(budget.truncated).toBe(true);
+    expect(budget.includedToolCharacters).toBeGreaterThanOrEqual(oneBlockCharacters);
+    expect(budget.includedToolCharacters).toBeLessThan(twoBlockCharacters);
+
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        // The tool labels its own results `[1]`/`[2]`; both URLs resolve to the
+        // same turn-local id, so both blocks are re-rendered as `[1]`.
+        { id: 1, title: firstBlock.title, url: firstBlock.url, content: firstBlock.content },
+        { id: 2, title: secondBlock.title, url: secondBlock.url, content: secondBlock.content },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens,
+      }),
+    );
+
+    // The model-facing `role: "tool"` content is the marker plus the first block.
+    const sent = sentToolContent(calls[1].messages);
+    expect(sent).toBe(`${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${formatSourceBlock(firstBlock)}`);
+    // The dropped duplicate never reappears in the re-render: its URL and body
+    // are gone and the shared `[1]` label occurs exactly once.
+    expect(sent).not.toContain("#second");
+    expect(sent).not.toContain(secondBlock.content);
+    expect(sentLabels(calls[1].messages)).toEqual([1]);
+
+    // SSE stays deduplicated to the single source, carrying the shared id.
+    expect(twoSourcesEvent(events)).toEqual([
+      {
+        type: "sources",
+        sources: [{ id: 1, title: "A", url: "https://a.example/one#first" }],
+      },
+    ]);
+
+    // The re-render never outgrows the budgeted payload: the sent content is at
+    // most the truncated content and stays inside the character allowance.
+    const truncated = truncateContentPreservingStructure(
+      payload,
+      budget.includedToolCharacters,
+    );
+    expect(sent.length).toBeLessThanOrEqual(truncated.length);
+    expect(sent.length).toBeLessThanOrEqual(budget.includedToolCharacters);
+
+    // The round the provider actually receives stays inside the target.
+    expect(estimateTokens(JSON.stringify(calls[1].messages))).toBeLessThanOrEqual(
+      Math.floor(contextSizeTokens * 0.9),
+    );
+  });
+
+  it("keeps both duplicate blocks when both fit and still dedups the SSE source", async () => {
+    // The other half of the same situation: when both blocks fit, both stay in
+    // front of the model (that is not what this fix changes) and the cumulative
+    // SSE list still collapses them into one source with one id, while the
+    // request stays inside the configured context target.
+    const contextSizeTokens = 4096;
+    const firstBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#first",
+      content: "first result body",
+    };
+    const secondBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#second",
+      content: "second result body",
+    };
+    const payload = renderedSearchPayload([firstBlock, secondBlock]);
+    const budget = calculateToolResultBudget({
+      maxTokens: contextSizeTokens,
+      messageTokens: fixedRoundTokens([userMessage("x")], {
+        id: "call_1",
+        name: "web_search",
+        arguments: "{}",
+      }),
+      toolResultCharacters: payload.length,
+    });
+    expect(budget.truncated).toBe(false);
+
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        { id: 1, title: firstBlock.title, url: firstBlock.url, content: firstBlock.content },
+        { id: 2, title: secondBlock.title, url: secondBlock.url, content: secondBlock.content },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens,
+      }),
+    );
+
+    // Nothing was dropped, so the payload reaches the model unchanged and both
+    // blocks carry the shared `[1]` label.
+    const sent = sentToolContent(calls[1].messages);
+    expect(sent).toBe(payload);
+    expect(sentLabels(calls[1].messages)).toEqual([1, 1]);
+
+    // One URL, one source, one id.
+    expect(twoSourcesEvent(events)).toEqual([
+      {
+        type: "sources",
+        sources: [{ id: 1, title: "A", url: "https://a.example/one#first" }],
+      },
+    ]);
+
+    expect(estimateTokens(JSON.stringify(calls[1].messages))).toBeLessThanOrEqual(
+      Math.floor(contextSizeTokens * 0.9),
+    );
   });
 });

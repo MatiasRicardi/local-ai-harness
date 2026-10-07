@@ -91,6 +91,31 @@ describe("buildToolRegistry", () => {
     expect(registry!.listDefinitions().map((d) => d.name)).toEqual(["calculator"]);
   });
 
+  it("does not register fetch_url when tools.fetchUrl is false/omitted", () => {
+    expect(buildToolRegistry({ tools: {} })).toBeUndefined();
+    expect(buildToolRegistry({ tools: { fetchUrl: false } })).toBeUndefined();
+  });
+
+  it("registers exactly fetch_url when tools.fetchUrl is true", () => {
+    const registry = buildToolRegistry({ tools: { fetchUrl: true } });
+
+    expect(registry).toBeDefined();
+    expect(registry!.listDefinitions().map((d) => d.name)).toEqual(["fetch_url"]);
+  });
+
+  it("keeps fetch_url independent of web_search in the same request", () => {
+    const registry = buildToolRegistry({
+      webSearch: webSearchEnabled,
+      tools: { fetchUrl: true },
+    });
+
+    expect(registry).toBeDefined();
+    expect(registry!.listDefinitions().map((d) => d.name).sort()).toEqual([
+      "fetch_url",
+      "web_search",
+    ]);
+  });
+
   it("offers web_search and calculator together in the same request-scoped registry", () => {
     const registry = buildToolRegistry({
       webSearch: webSearchEnabled,

@@ -304,6 +304,27 @@ without tools. A tool that has already reached its own per-turn execution limit
 synthetic result rather than executed again. See the roadmap for the bounded
 multi-step loop limits.
 
+**Source identity.** Source ids are resolved **before** the model-facing tool result is
+rendered and **before** the request is budgeted, then never rewritten: the `[N]` label the
+model reads is byte-identical to the `id` of that source in the `sources` event. Ids come
+from one turn-local accumulator shared by every tool of the turn (`web_search` blocks and
+`fetch_url` pages alike), which reserves an id atomically and keys it by normalized URL
+(WHATWG serialization with the fragment dropped, query/path/trailing slash preserved), so
+distinct URLs of a single call never share a label, ids stay unique across the whole
+turn even when they cross a digit boundary (`[9]` → `[10]`), and a URL delivered by an
+earlier tool keeps its original id instead of getting a second label. Two results of one
+call whose normalized URLs are equal deliberately share a single id (that is the dedup),
+so an id identifies a *source*, never a specific block. Which blocks entered the model
+context is therefore decided by their known positions in the rendered payload measured
+against the length of the content that was actually sent — truncation only ever keeps a
+prefix, so delivered blocks are always a leading run — and never by source id. A source is
+reported only when its text really entered the model context — a search block when the whole
+`[N]` block survives context truncation, a fetched page when at least one character past the
+harness-authored `<page-content>` prefix survives it — and blocks dropped by truncation
+give their ids back to the accumulator. Each `sources` event carries the complete
+cumulative list of the turn (the frontend replaces `message.sources` per event), so a tool
+that contributes nothing, such as `calculator`, re-emits the existing list unchanged.
+
 ### Documented decision: first-round buffering with Web Search
 
 When Web Search is enabled, every tool-enabled model round is buffered before

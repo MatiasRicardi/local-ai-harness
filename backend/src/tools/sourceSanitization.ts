@@ -24,6 +24,18 @@ export interface SourceRef {
 type MaybeSource = { id?: unknown; title?: unknown; url?: unknown } | null | undefined;
 
 /**
+ * A sanitized, untrusted source reference WITHOUT an assigned id.
+ *
+ * `fetch_url` never chooses its own id (the turn source accumulator does), so
+ * this carries only the harness-sanitized `title` and `url`. It is fed into the
+ * accumulator, which assigns the stable positive id.
+ */
+export interface SanitizedSourceCandidate {
+  title: string;
+  url: string;
+}
+
+/**
  * Validate a single source URL.
  *
  * Returns the trimmed URL when it is a non-empty `http:`/`https:` URL, or
@@ -62,6 +74,31 @@ export function sanitizeSourceUrl(url: unknown): string | undefined {
   }
 
   return trimmed;
+}
+
+/**
+ * Sanitize an untrusted source candidate (title + url) into a {@link
+ * SanitizedSourceCandidate}.
+ *
+ * Reuses {@link sanitizeSourceUrl} so the remote url passes the same http(s)
+ * guard, and never lets the remote title leak raw: it is trimmed and has null
+ * characters stripped. Used by `fetch_url`, which must not invent an id of its
+ * own — the turn source accumulator assigns the stable id after sanitizing.
+ */
+export function sanitizeSourceCandidate(candidate: unknown): SanitizedSourceCandidate | undefined {
+  if (typeof candidate !== "object" || candidate === null) {
+    return undefined;
+  }
+
+  const maybe = candidate as { title?: unknown; url?: unknown };
+  const url = sanitizeSourceUrl(maybe.url);
+  if (url === undefined) {
+    return undefined;
+  }
+
+  const rawTitle = typeof maybe.title === "string" ? maybe.title : "";
+  const title = rawTitle.replace(/\u0000/g, "").trim();
+  return { title, url };
 }
 
 /**

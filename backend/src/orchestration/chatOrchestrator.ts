@@ -4,8 +4,12 @@ import type { ProviderConfig } from "../provider/schemas.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../provider/client.js";
 import { SseParser, type AccumulatedToolCall } from "../provider/sseParser.js";
 import type { ToolDefinition, ToolExecutionResult, ToolRegistry } from "../tools/types.js";
-import type { SourceRef } from "../tools/sourceSanitization.js";
-import { sanitizeSources } from "../tools/sourceSanitization.js";
+import {
+  sanitizeSourceCandidate,
+  type SanitizedSourceCandidate,
+  type SourceRef,
+} from "../tools/sourceSanitization.js";
+import { TurnSourceAccumulator, type SourceReservation } from "./turnSources.js";
 import { normalizeError, AppError } from "../utils/errorHandler.js";
 import { estimateTokens } from "../context/token-estimate.js";
 import {
@@ -160,35 +164,58 @@ function toStructuredSources(value: unknown): WebSearchSource[] {
 }
 
 /**
- * Which source IDs actually entered the model's context.
+ * One rendered web-search block: the model-facing source (carrying its final
+ * turn-local id), the sanitized metadata candidate it may produce, and the id
+ * reservation it was rendered from. Scoped to a single tool result — nothing
+ * about the reservation escapes {@link ChatOrchestrator.buildToolResultMessages}.
+ */
+type SearchBlock = {
+  readonly source: WebSearchSource;
+  readonly candidate: SanitizedSourceCandidate | undefined;
+  readonly reservation: SourceReservation;
+};
+
+/**
+ * How many **leading** web-search blocks actually entered the model's context.
  *
  * The full web content is the untrusted marker followed by one exact
  * `[id]`-prefixed block per source (see webSearchFormat), joined by a blank
  * line. `toolResultContent` is that content cut at a blank-line boundary, so
- * every block start and end lands on that boundary. A source is delivered iff
- * its whole block fits within the truncated content, computed from the known
- * block lengths and positions — never by re-parsing the untrusted body.
+ * every block start and end lands on that boundary, and a block is delivered
+ * iff its whole block fits inside the content that was sent — computed from the
+ * known block lengths and positions, never by re-parsing the untrusted body.
  *
- * This keeps source IDs as structured metadata: a blank-line paragraph inside
- * another source's body (for example a `[2]\nTitle:` mention in source 1) can
- * never be mistaken for a delivered source, and a source dropped by truncation
- * is excluded. The set stays consistent with what the model actually received.
+ * Delivery is expressed as a *count of leading blocks* rather than as a set of
+ * source IDs because source IDs do not identify a block: two results whose
+ * normalized URLs are equal share one ID (that is the point of URL dedup), so a
+ * `Set<number>` of delivered IDs would report both blocks as delivered when only
+ * the first one survived truncation, and the re-render below would reinsert a
+ * block the model never received. Since `truncateContentPreservingStructure`
+ * only ever keeps a prefix, the delivered blocks are always `blocks[0..n)` and
+ * never an arbitrary subset, which is what makes a count the right shape.
+ *
+ * Keeping this structural also means a `[2]\nTitle:` mention or a blank-line
+ * paragraph inside another source's body can never forge a delivered block.
  *
  * @param sources structured sources in block order (see {@link toStructuredSources})
  * @param toolResultContent the (possibly truncated) content sent to the model
- * @returns the set of source IDs whose blocks were delivered
+ * @returns how many leading blocks were delivered in full
  */
-function deliveredSourceIds(sources: WebSearchSource[], toolResultContent: string): Set<number> {
-  const delivered = new Set<number>();
-  const markerLength = WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length;
+function deliveredSourceBlockCount(
+  sources: readonly WebSearchSource[],
+  toolResultContent: string,
+): number {
   const contentLength = toolResultContent.length;
-  let offset = markerLength + "\n\n".length;
+  let offset = WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length + "\n\n".length;
+  let delivered = 0;
   for (const source of sources) {
-    const block = formatSourceBlock(source);
-    const blockEnd = offset + block.length;
-    if (blockEnd <= contentLength) {
-      delivered.add(source.id);
+    const blockEnd = offset + formatSourceBlock(source).length;
+    if (blockEnd > contentLength) {
+      // Blocks are a contiguous prefix of the content, so once one stops
+      // fitting, no later block can.
+      break;
     }
+    delivered += 1;
     offset = blockEnd + "\n\n".length;
   }
   return delivered;
@@ -251,6 +278,12 @@ export class ChatOrchestrator {
     // final round is sent without tool definitions.
     let toolsAvailable = true;
 
+    // Turn-local cumulative source accumulator. Each tool execution merges its
+    // delivered sources here and the FULL accumulated list is re-emitted, so the
+    // UI (which replaces `message.sources` per event) never loses sources from
+    // earlier tools in the turn.
+    const turnSources = new TurnSourceAccumulator();
+
     // The loop is bounded by MAX_MODEL_ROUNDS on every iteration, so a fifth
     // round is structurally impossible regardless of how the control flow
     // branches below.
@@ -307,6 +340,7 @@ export class ChatOrchestrator {
         workingMessages,
         round.toolCalls,
         executionsByTool,
+        turnSources,
       );
       if (toolBlockedByPolicy) {
         toolsAvailable = false;
@@ -359,6 +393,7 @@ export class ChatOrchestrator {
     workingMessages: ProviderRequestMessage[],
     toolCalls: AccumulatedToolCall[],
     executionsByTool: Map<string, number>,
+    turnSources: TurnSourceAccumulator,
   ): AsyncGenerator<ChatOrchestrationEvent, boolean, unknown> {
     const { tool, call } = validateToolCalls(toolCalls, input.tools);
 
@@ -460,22 +495,25 @@ export class ChatOrchestrator {
 
     // Append the internal assistant tool-call / tool-result messages to the
     // working list (budgeting the tool-result body against the context window).
-    const { assistantMessage, toolResultMessage, delivered } =
-      await this.buildToolResultMessages(
-        workingMessages,
-        call,
-        result,
-        input.contextSizeTokens,
-      );
+    // The ids the model sees in the tool-result body are reserved, and the
+    // sources that actually reached the model are committed, inside that call.
+    const { assistantMessage, toolResultMessage } = await this.buildToolResultMessages(
+      workingMessages,
+      call,
+      result,
+      turnSources,
+      input.contextSizeTokens,
+    );
     workingMessages.push(assistantMessage, toolResultMessage);
 
-    // Emit the tool lifecycle tail: only the sources whose blocks actually
-    // entered the model's context (see {@link buildToolResultMessages}), so a
-    // source emitted to the UI but never sent to the model is not surfaced.
-    const sanitizedSources = sanitizeSources(result.metadata?.sources);
-    const deliveredSources = sanitizedSources.filter((source) => delivered.has(source.id));
+    // Emit the tool lifecycle tail with the COMPLETE cumulative list held by the
+    // turn-local accumulator, so the UI keeps every source delivered earlier in
+    // the same turn (it replaces `message.sources` per event). A tool that added
+    // no source (e.g. calculator) re-emits the existing list unchanged, so prior
+    // sources are never dropped.
+    const accumulatedSources = turnSources.toList();
     yield { type: "tool_end", name: tool.definition.name };
-    yield { type: "sources", sources: deliveredSources };
+    yield { type: "sources", sources: accumulatedSources };
 
     // Executed normally (no policy block). The only other exits are the early
     // `return false` paths above and thrown errors.
@@ -530,14 +568,77 @@ export class ChatOrchestrator {
    * tool-result message counts against the room available to the next result
    * (step 42): a chain of tools shares one finite, cumulative input budget
    * instead of each getting an independent full-size allowance.
+   *
+   * The steps run in this fixed order, so the budget always describes the exact
+   * bytes the provider receives:
+   *
+   * ```text
+   * reserve final source ids -> render model-facing content -> budget
+   *   -> truncate -> decide delivery from the sent content -> commit sources
+   * ```
+   *
+   * Resolving the ids first (and never rewriting them afterwards) is what keeps
+   * the model-visible `[N]` labels equal to the `SourceRef.id` values emitted on
+   * the `sources` event, and keeps the serialized request within the configured
+   * context target even when an id crosses a digit boundary (`[9]` -> `[10]`).
+   *
+   * Delivered sources are committed into `turnSources` here (the accumulator is
+   * the single id authority); the caller emits its cumulative list verbatim.
    */
   private async buildToolResultMessages(
     baseMessages: ProviderRequestMessage[],
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
+    turnSources: TurnSourceAccumulator,
     contextSizeTokens?: number,
-  ): Promise<{ assistantMessage: ProviderRequestMessage; toolResultMessage: ProviderRequestMessage; delivered: Set<number> }> {
-    const toolContent = result.content;
+  ): Promise<{
+    assistantMessage: ProviderRequestMessage;
+    toolResultMessage: ProviderRequestMessage;
+  }> {
+    // A `fetch_url`-style result announces where its real page text starts; any
+    // other tool is budgeted as-is. The two shapes decide delivery differently,
+    // so the shape is resolved once here.
+    const sourceContentStart =
+      typeof result.metadata?.sourceContentStart === "number"
+        ? result.metadata.sourceContentStart
+        : undefined;
+
+    // Only a genuine web-search payload (the harness marker + one well-formed
+    // structured block per result) is re-rendered with turn-local ids. Anything
+    // else — fetch_url, calculator, a search result without usable metadata —
+    // keeps its own content byte for byte.
+    const structuredSources =
+      sourceContentStart === undefined ? toStructuredSources(result.metadata?.sources) : [];
+    const rebuildsBlocks =
+      structuredSources.length > 0 &&
+      result.content.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER);
+
+    // Reserve the definitive id of every block up-front, atomically and by URL.
+    // The tool's own per-call `[1]`, `[2]`, … sequence restarts on each call and
+    // would collide with an id taken earlier in the turn (e.g. by `fetch_url`),
+    // and rewriting ids after budgeting would let the final content grow past
+    // the allowance computed for the shorter pre-rewrite string. Because the
+    // reservation is URL-aware, a URL already delivered by an earlier tool keeps
+    // that source's id instead of being handed a fresh, desynchronizing label.
+    const blocks: SearchBlock[] = [];
+    if (rebuildsBlocks) {
+      for (const source of structuredSources) {
+        const reservation = turnSources.reserveSource(source.url);
+        blocks.push({
+          source: { ...source, id: reservation.id },
+          candidate: sanitizeSourceCandidate({ title: source.title, url: source.url }),
+          reservation,
+        });
+      }
+    }
+
+    // The string the provider actually receives, ids included. Budgeting, then,
+    // sees the same bytes that are sent.
+    const toolContent = rebuildsBlocks
+      ? `${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${blocks
+          .map((block) => formatSourceBlock(block.source))
+          .join("\n\n")}`
+      : result.content;
 
     // The two internal messages we are about to append. The tool-result *body*
     // is budgeted, so — until we know how much fits — we reserve the mandatory
@@ -596,22 +697,96 @@ export class ChatOrchestrator {
     //                     boundary and preserving any structural header;
     // - no room at all  -> keep the harness omission fallback (already reserved
     //                     in `messageTokens`, so nothing extra is added).
-    const toolResultContent = budget.truncated
-      ? budget.includedToolCharacters > 0
-        ? truncateContentPreservingStructure(toolContent, budget.includedToolCharacters)
-        : TOOL_RESULT_CONTEXT_OMISSION_TEXT
-      : toolContent;
+    let toolResultContent: string;
+    let omitted = false;
+    if (!budget.truncated) {
+      toolResultContent = toolContent;
+    } else if (budget.includedToolCharacters > 0) {
+      toolResultContent = truncateContentPreservingStructure(
+        toolContent,
+        budget.includedToolCharacters,
+      );
+    } else {
+      // No room at all: the harness omission fallback replaces the payload, so
+      // nothing this tool produced reaches the model.
+      omitted = true;
+      toolResultContent = TOOL_RESULT_CONTEXT_OMISSION_TEXT;
+    }
 
-    // Report only the sources whose blocks are actually present in the (possibly
-    // truncated or omitted) content sent to the model, so the emitted `sources`
-    // event stays consistent with the delivered content. The set is derived from
-    // complete block boundaries, not from a substring search of the (untrusted)
-    // body. When the payload was omitted, no block is present, so no source is
-    // reported as delivered.
-    const structuredSources = toolContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
-      ? toStructuredSources(result.metadata?.sources)
-      : [];
-    const delivered = deliveredSourceIds(structuredSources, toolResultContent);
+    // ── Delivery: decided from harness offsets on the content actually sent ────
+    //
+    // `truncateContentPreservingStructure` only ever keeps a PREFIX of the
+    // content it was given (the leading header plus whole sections at blank-line
+    // boundaries), so an offset measured on `toolContent` stays meaningful for
+    // `toolResultContent`. Delivery is decided from those harness-authored
+    // offsets alone: never from the theoretical `budget.includedToolCharacters`
+    // allowance (a section-based truncator can return far less than it), and
+    // never by looking for a URL, a title or any other string inside the
+    // untrusted body, which can forge all of those.
+    if (omitted) {
+      // Nothing entered the model context, so no source of this execution was
+      // delivered. Ids reserved for blocks that never made it are handed back
+      // to the turn-local allocator instead of being burned.
+      for (const block of blocks) {
+        turnSources.releaseSource(block.source.url, block.reservation);
+      }
+    } else if (sourceContentStart !== undefined) {
+      // fetch_url-style: one source, delivered iff at least ONE character of the
+      // real extracted page text is present in the content that is sent. The
+      // harness prefix (header, blank line, `<page-content>` and its newline)
+      // ends exactly at `sourceContentStart`, so a header-only result stops
+      // there and the strict comparison below means "a remote character made it".
+      const candidate = sanitizeSourceCandidate(result.metadata?.source);
+      if (candidate !== undefined && toolResultContent.length > sourceContentStart) {
+        turnSources.add([candidate]);
+      }
+    } else {
+      // web_search-style: a block counts as delivered iff its whole `[id]` block
+      // fits inside the content that is sent, derived from the known block
+      // positions and the length of that content rather than from a substring
+      // search of the (untrusted) body. Delivered blocks are a prefix, so they
+      // are selected by position and not by ID (duplicate URLs share one ID).
+      const deliveredCount = deliveredSourceBlockCount(
+        blocks.map((block) => block.source),
+        toolResultContent,
+      );
+
+      const deliveredBlocks: WebSearchSource[] = [];
+      for (const [index, block] of blocks.entries()) {
+        if (index >= deliveredCount) {
+          // Dropped by truncation: the model never saw this label, so the id is
+          // released for a later tool in the same turn. Releasing a duplicate
+          // URL is a no-op once its first block is committed below, because that
+          // id belongs to the earlier delivered source.
+          turnSources.releaseSource(block.source.url, block.reservation);
+          continue;
+        }
+        if (block.candidate !== undefined) {
+          turnSources.commitSource(block.candidate, block.reservation);
+        }
+        deliveredBlocks.push(block.source);
+      }
+
+      // Re-render the payload from the delivered blocks only (never by parsing or
+      // rewriting the untrusted body). Blocks are a contiguous prefix here, so
+      // the result is at most the truncated string: the budget computed above
+      // still holds, and a payload cut in the middle of a block is dropped whole
+      // instead of leaving a partial, unattributed block in front of the model.
+      if (deliveredBlocks.length > 0) {
+        toolResultContent =
+          `${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${deliveredBlocks
+            .map(formatSourceBlock)
+            .join("\n\n")}`;
+      } else if (blocks.length > 0) {
+        // Not one complete block survived truncation. Without a rewrite the
+        // truncated prefix would keep showing the `[N]` label of a source that is
+        // never delivered — an id that is handed back to the allocator below and
+        // may be reused by a later tool — so the payload is replaced by the
+        // harness omission notice. This only ever shortens the content, so the
+        // budget computed above still holds.
+        toolResultContent = TOOL_RESULT_CONTEXT_OMISSION_TEXT;
+      }
+    }
 
     const toolResultMessage: ProviderRequestMessage = {
       role: "tool",
@@ -622,7 +797,6 @@ export class ChatOrchestrator {
     return {
       assistantMessage,
       toolResultMessage,
-      delivered,
     };
   }
 
