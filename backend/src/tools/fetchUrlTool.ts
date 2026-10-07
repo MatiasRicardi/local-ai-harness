@@ -130,15 +130,21 @@ function resolveSourceTitle(extractedTitle: string | undefined, finalUrl: string
  * Build the harness-authored untrusted wrapper around the extracted page text.
  *
  * The wrapper is laid out with blank-line-separated sections so the generic
- * budget trituncator (`truncateContentPreservingStructure`) can drop whole
+ * budget truncator (`truncateContentPreservingStructure`) can drop whole
  * sections at their boundaries — in particular the page-content section can be
  * dropped independently of the header. `sourceContentStart` is the offset, inside
- * the returned wrapper, where the real extracted text begins: it is computed by
- * the harness from the header length, so it can never be forged by the remote
- * page or the model and is used later to decide whether real page text was
+ * the returned wrapper, where the FIRST REAL CHARACTER of the extracted page
+ * text begins: everything before it (untrusted-content header, the blank-line
+ * section separator and the opening `<page-content>` tag plus its newline) is
+ * harness-authored. It is measured from the very same strings that make up the
+ * wrapper, so it cannot drift, and it can never be forged by the remote page or
+ * the model. The orchestrator uses it to decide whether real page text was
  * actually delivered to the model.
+ *
+ * Exported for tests: this exact byte layout is what the delivery decision is
+ * based on, so the tests exercise the real wrapper instead of a copy of it.
  */
-function buildWrapper(params: {
+export function buildUntrustedPageWrapper(params: {
   finalUrl: string;
   title: string;
   extractedText: string;
@@ -149,13 +155,14 @@ function buildWrapper(params: {
     `${UNTRUSTED_EXTERNAL_WEB_CONTENT_INSTRUCTIONS}\n` +
     `URL: ${finalUrl}\n` +
     `Title: ${title}`;
-  const body = `<page-content>\n${extractedText}\n</page-content>`;
+  // Everything up to the extracted text is harness-authored: the header, the
+  // blank-line section separator and the opening `<page-content>` tag with its
+  // newline. The offset is taken from this same prefix string, so it always
+  // points at the first character of `extractedText` inside the wrapper.
+  const prefix = `${header}\n\n<page-content>\n`;
   const footer = "[END UNTRUSTED EXTERNAL WEB PAGE]";
-  const wrapper = `${header}\n\n${body}\n\n${footer}`;
-  // Offset where `<page-content>` begins, i.e. right after the header + the
-  // blank-line section separator. Anything up to this offset is harness-authored
-  // header/metadata, never remote page text.
-  const sourceContentStart = header.length + "\n\n".length;
+  const wrapper = `${prefix}${extractedText}\n</page-content>\n\n${footer}`;
+  const sourceContentStart = prefix.length;
   return { wrapper, sourceContentStart };
 }
 
@@ -224,11 +231,11 @@ export function createFetchUrlTool(): Tool {
       if (candidate === undefined) {
         // Should not happen: finalUrl is a validated http(s) URL. Never emit a
         // source we could not sanitize, but still return the fetched content.
-        const { wrapper } = buildWrapper({ finalUrl, title, extractedText: extracted.text });
+        const { wrapper } = buildUntrustedPageWrapper({ finalUrl, title, extractedText: extracted.text });
         return { content: wrapper };
       }
 
-      const { wrapper, sourceContentStart } = buildWrapper({
+      const { wrapper, sourceContentStart } = buildUntrustedPageWrapper({
         finalUrl,
         title,
         extractedText: extracted.text,

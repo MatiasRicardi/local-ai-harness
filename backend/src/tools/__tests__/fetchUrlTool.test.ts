@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createFetchUrlTool } from "../fetchUrlTool.js";
+import { buildUntrustedPageWrapper, createFetchUrlTool } from "../fetchUrlTool.js";
 import { fetchUrl, FetchUrlClientError } from "../fetchUrlClient.js";
 import { validateFetchUrlTarget, FetchUrlPolicyError } from "../fetchUrlPolicy.js";
 import { AppError } from "../../utils/errorHandler.js";
@@ -112,6 +112,20 @@ describe("fetch_url tool — execution", () => {
     // The remote page's real text is inside the boundary...
     expect(result.content).toContain("First paragraph.");
     expect(result.content).toContain("Second paragraph.");
+  });
+
+  it("reports sourceContentStart as the offset of the first extracted character", async () => {
+    // The whole prefix (header, blank line, `<page-content>` and its newline) is
+    // harness-authored, so the offset must land exactly on the first character of
+    // the extracted page text and not on the tag itself. Delivery reporting
+    // compares this offset with the length of the content that is really sent.
+    const tool = createFetchUrlTool();
+    const result = await tool.execute({ url: "https://example.com/page" }, {});
+    const start = result.metadata?.sourceContentStart as number;
+
+    expect(typeof start).toBe("number");
+    expect(result.content.slice(0, start).endsWith("<page-content>\n")).toBe(true);
+    expect(result.content.slice(start).startsWith("First paragraph.")).toBe(true);
   });
 
   it("always wraps the remote content in the harness-authored untrusted boundary", async () => {
@@ -232,5 +246,48 @@ describe("fetch_url tool — execution", () => {
       tool.execute({ url: "http://127.0.0.1:9/secret" }, {}),
     ).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildUntrustedPageWrapper", () => {
+  const extractedText = "First real sentence of the page.\n\nSecond paragraph.";
+
+  it("puts every harness-authored byte before sourceContentStart", () => {
+    const { wrapper, sourceContentStart } = buildUntrustedPageWrapper({
+      finalUrl: "https://example.com/a",
+      title: "A page",
+      extractedText,
+    });
+
+    // The prefix carries the untrusted header, the blank-line separator and the
+    // opening tag; the offset is the first character of the extracted text.
+    expect(wrapper.slice(0, sourceContentStart).split("\n")[0]).toBe(
+      "[BEGIN UNTRUSTED EXTERNAL WEB PAGE]",
+    );
+    expect(wrapper.slice(0, sourceContentStart).endsWith("\n\n<page-content>\n")).toBe(true);
+    expect(wrapper.slice(sourceContentStart, sourceContentStart + extractedText.length)).toBe(
+      extractedText,
+    );
+    expect(wrapper.slice(sourceContentStart + extractedText.length)).toBe(
+      "\n</page-content>\n\n[END UNTRUSTED EXTERNAL WEB PAGE]",
+    );
+  });
+
+  it("lets a header-only payload be detected by length alone", () => {
+    // The delivery rule is `sent content length > sourceContentStart`, so a
+    // message cut at the end of the prefix must not exceed the offset, while one
+    // extra character of real page text must.
+    const { wrapper, sourceContentStart } = buildUntrustedPageWrapper({
+      finalUrl: "https://example.com/a",
+      title: "A page",
+      extractedText,
+    });
+    const headerOnly = wrapper.slice(0, sourceContentStart);
+    const withOnePageCharacter = wrapper.slice(0, sourceContentStart + 1);
+
+    expect(headerOnly).not.toContain("First real");
+    expect(withOnePageCharacter).toBe(`${headerOnly}${extractedText[0]}`);
+    expect(headerOnly.length).toBe(sourceContentStart);
+    expect(withOnePageCharacter.length).toBeGreaterThan(sourceContentStart);
   });
 });
