@@ -473,6 +473,7 @@ export class ChatOrchestrator {
         workingMessages,
         call,
         result,
+        turnSources,
         input.contextSizeTokens,
       );
     workingMessages.push(assistantMessage, toolResultMessage);
@@ -545,15 +546,17 @@ export class ChatOrchestrator {
     baseMessages: ProviderRequestMessage[],
     call: ResolvedToolCall["call"],
     result: ToolExecutionResult,
+    turnSources: TurnSourceAccumulator,
     contextSizeTokens?: number,
   ): Promise<{
     assistantMessage: ProviderRequestMessage;
     toolResultMessage: ProviderRequestMessage;
     /**
      * The sources actually delivered to the model, as untrusted `{ title, url }`
-     * candidates with an optional stable id (web search keeps its model-visible
-     * block id; fetch_url omits it — the turn accumulator assigns it). The
-     * accumulator sanitizes, deduplicates and id-assigns these.
+     * candidates each carrying a turn-local id drawn from the shared allocator
+     * (both web search and fetch_url). The ids equal the `[N]` references the
+     * model sees in the tool-result body, so the metadata never disagrees with
+     * them. The accumulator sanitizes and deduplicates these.
      */
     deliveredSources: DeliveredSource[];
   }> {
@@ -616,7 +619,7 @@ export class ChatOrchestrator {
     //                     boundary and preserving any structural header;
     // - no room at all  -> keep the harness omission fallback (already reserved
     //                     in `messageTokens`, so nothing extra is added).
-    const toolResultContent = budget.truncated
+    let toolResultContent = budget.truncated
       ? budget.includedToolCharacters > 0
         ? truncateContentPreservingStructure(toolContent, budget.includedToolCharacters)
         : TOOL_RESULT_CONTEXT_OMISSION_TEXT
@@ -652,15 +655,39 @@ export class ChatOrchestrator {
         ? toStructuredSources(result.metadata?.sources)
         : [];
       const deliveredIds = deliveredSourceIds(structuredSources, toolResultContent);
+
+      // Assign the model-visible block ids from the shared turn-local allocator
+      // instead of the tool's per-call `[1]`, `[2]`, … sequence: that sequence
+      // restarts on each call and would collide with a fetch_url id assigned
+      // earlier in the turn. The allocated ids are used in BOTH the structured
+      // metadata pushed below and the blocks rewritten here, so the `[N]` the
+      // model sees always matches the source metadata.
+      const deliveredBlocks: WebSearchSource[] = [];
       for (const source of structuredSources) {
-        if (deliveredIds.has(source.id)) {
-          const candidate = sanitizeSourceCandidate({ title: source.title, url: source.url });
-          if (candidate) {
-            // Preserve the model-visible web-search block id; the accumulator
-            // keeps it verbatim.
-            deliveredSources.push({ ...candidate, id: source.id });
-          }
+        if (!deliveredIds.has(source.id)) {
+          continue;
         }
+        const id = turnSources.allocate();
+        const candidate = sanitizeSourceCandidate({ title: source.title, url: source.url });
+        if (candidate) {
+          deliveredSources.push({ ...candidate, id });
+        }
+        deliveredBlocks.push({ ...source, id });
+      }
+
+      // Rewrite the delivered blocks to carry the allocated ids. The blocks are
+      // regenerated from the structured metadata (never by re-parsing the
+      // untrusted body), so remote content is never rewritten. Only when at
+      // least one block was delivered and the payload still starts with the
+      // marker (i.e. it was not omitted) is the content rewritten.
+      if (
+        deliveredBlocks.length > 0 &&
+        toolResultContent.startsWith(WEB_SEARCH_UNTRUSTED_CONTENT_MARKER)
+      ) {
+        toolResultContent =
+          `${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${deliveredBlocks
+            .map(formatSourceBlock)
+            .join("\n\n")}`;
       }
     }
 

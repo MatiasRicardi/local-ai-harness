@@ -105,6 +105,26 @@ describe("TurnSourceAccumulator", () => {
     expect(preserved).toEqual(afterFirst);
   });
 
+  it("shares one allocator between an explicit id and id-less sources (no collision)", () => {
+    // Mirrors the orchestrator: web search allocates a fresh id from the shared
+    // counter and passes it back, while fetch_url carries no id. Both must draw
+    // from the same counter so a web_search block and a fetch_url source never
+    // both receive the same `[N]` label (web search's own per-call `[1]`, `[2]`,
+    // … sequence would restart each call and collide).
+    const acc = new TurnSourceAccumulator();
+
+    const afterFetch = acc.add([{ title: "F", url: "https://f.com" }]);
+    expect(idOf(afterFetch)).toEqual([1]);
+
+    const webId = acc.allocate();
+    expect(webId).toBe(2);
+    const afterWeb = acc.add([{ title: "W", url: "https://w.com", id: webId }]);
+    expect(idOf(afterWeb)).toEqual([1, 2]);
+
+    const afterMore = acc.add([{ title: "M", url: "https://m.com" }]);
+    expect(idOf(afterMore)).toEqual([1, 2, 3]);
+  });
+
   it("stores only id/title/url (no harness wrapper metadata)", () => {
     const acc = new TurnSourceAccumulator();
     const sources = acc.add([{ title: "A", url: "https://a.com" }]);

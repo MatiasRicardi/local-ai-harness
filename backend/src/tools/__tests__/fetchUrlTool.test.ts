@@ -49,6 +49,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Restore any stubbed globals (e.g. `fetch`) even when an earlier assertion
+  // in a test failed, so the stub never leaks into a later test.
+  vi.unstubAllGlobals();
 });
 
 describe("fetch_url tool — definition and argument validation", () => {
@@ -229,7 +232,5 @@ describe("fetch_url tool — execution", () => {
       tool.execute({ url: "http://127.0.0.1:9/secret" }, {}),
     ).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
-
-    vi.unstubAllGlobals();
   });
 });

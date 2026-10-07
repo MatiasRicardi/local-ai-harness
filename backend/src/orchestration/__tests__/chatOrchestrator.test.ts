@@ -1700,6 +1700,58 @@ describe("ChatOrchestrator — cumulative turn-local sources (Step 50)", () => {
     });
   });
 
+  it("gives web_search a non-colliding id when fetch_url runs first, and rewrites the block", async () => {
+    // fetch_url runs first and takes id 1. A later web_search must NOT keep its
+    // own per-call `[1]` (which would collide with fetch_url's id 1 and make the
+    // model see two different sources both labeled `[1]`): the orchestrator
+    // allocates the next id from the shared counter and rewrites the model-
+    // visible block so the `[N]` the model sees matches the source metadata.
+    const registry = createRegistry();
+    registry.register(
+      fetchTool("Dogs", "https://example.com/dogs", "https://example.com/dogs".length + 20),
+    );
+    registry.register(webSearchTool("Cats", "https://example.com/cats", 1));
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "fetch_url", '{"url":"https://example.com/dogs"}'),
+      ...toolCallRound("call_2", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    );
+
+    const sourcesEvents = twoSourcesEvent(events);
+    // fetch_url takes id 1; web_search takes the next id from the shared counter.
+    expect(sourcesEvents[0]).toEqual({
+      type: "sources",
+      sources: [{ id: 1, title: "Dogs", url: "https://example.com/dogs" }],
+    });
+    expect(sourcesEvents[1]).toEqual({
+      type: "sources",
+      sources: [
+        { id: 1, title: "Dogs", url: "https://example.com/dogs" },
+        { id: 2, title: "Cats", url: "https://example.com/cats" },
+      ],
+    });
+
+    // The model-visible web_search block carries the allocated id [2], never the
+    // colliding [1] it would have used from its own per-call sequence. The
+    // web_search tool result is appended after round 2, so it surfaces in the
+    // final-answer round's recorded request.
+    const toolResults = (calls[2].messages as Array<{
+      role: string;
+      content?: string;
+    }>).filter((message) => message.role === "tool");
+    const webResult = toolResults.at(-1);
+    expect(webResult?.content).toContain("[2]\nTitle: Cats");
+    expect(webResult?.content).not.toContain("[1]\nURL: https://example.com/cats");
+  });
+
   it("keeps the earlier source when a later tool adds nothing (calculator)", async () => {
     const registry = createRegistry();
     registry.register(webSearchTool("Cats", "https://example.com/cats"));

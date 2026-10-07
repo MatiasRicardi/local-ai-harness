@@ -14,17 +14,19 @@ import {
 //
 // This accumulator is request/turn-local: it is created fresh per turn and holds
 // no state beyond it. It sanitizes remote candidates, deduplicates by normalized
-// URL, and assigns/preserves positive numeric ids. web_search carries its
-// model-visible ids (used inside its `[N]` content blocks), so those are kept
-// verbatim; fetch_url carries no id, so the accumulator assigns the smallest
-// unused positive integer.
+// URL, and assigns/preserves positive numeric ids. Both source types draw their
+// ids from the same turn-local allocator, so a `web_search` block and a
+// `fetch_url` source can never both receive the same `[N]` label: web_search
+// passes the id it allocated (used inside its `[N]` content blocks), fetch_url
+// carries no id, so the accumulator assigns the smallest unused positive integer.
 
 /**
  * A source delivered to the model, before id assignment.
  *
  * `title`/`url` are the raw (still untrusted) values from the tool result; the
- * accumulator sanitizes them. `id` is present only for web search (its
- * model-visible block id) and must be preserved; fetch_url omits it.
+ * accumulator sanitizes them. `id` is present for web search (the id it
+ * allocated, matching its `[N]` block reference) and must be preserved; fetch_url
+ * omits it, so the allocator assigns one.
  */
 export interface DeliveredSource {
   title: string;
@@ -100,16 +102,33 @@ export class TurnSourceAccumulator {
     return this.toList();
   }
 
-  /** Smallest unused positive integer id, or the candidate's id when valid. */
-  private reserveId(candidateId: number | undefined): number | undefined {
-    if (typeof candidateId === "number" && Number.isInteger(candidateId) && candidateId > 0) {
-      return candidateId;
-    }
+  /**
+   * Allocate the next turn-local source id: the smallest unused positive
+   * integer. This is the single allocator both source types draw from, so a
+   * `web_search` block and a `fetch_url` source can never both receive the same
+   * `[N]` label (web search's own per-call `[1]`, `[2]`, … sequence would restart
+   * on each call and collide with an earlier fetch_url id).
+   */
+  allocate(): number {
     let id = 1;
     while (this.usedIds.has(id)) {
       id++;
     }
     return id;
+  }
+
+  /**
+   * Keep a caller-supplied id when it is a valid, unused positive integer,
+   * otherwise allocate a fresh one. Used by {@link add} for sources that already
+   * carry an id (web search passes the id it just allocated from {@link
+   * allocate}, so it is preserved verbatim); fetch_url carries no id and falls
+   * through to a fresh allocation from the same counter.
+   */
+  private reserveId(candidateId: number | undefined): number | undefined {
+    if (typeof candidateId === "number" && Number.isInteger(candidateId) && candidateId > 0) {
+      return candidateId;
+    }
+    return this.allocate();
   }
 
   /** Snapshot of the current cumulative source list, in insertion order. */
