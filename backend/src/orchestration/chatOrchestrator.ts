@@ -176,35 +176,46 @@ type SearchBlock = {
 };
 
 /**
- * Which source IDs actually entered the model's context.
+ * How many **leading** web-search blocks actually entered the model's context.
  *
  * The full web content is the untrusted marker followed by one exact
  * `[id]`-prefixed block per source (see webSearchFormat), joined by a blank
  * line. `toolResultContent` is that content cut at a blank-line boundary, so
- * every block start and end lands on that boundary. A source is delivered iff
- * its whole block fits within the truncated content, computed from the known
- * block lengths and positions — never by re-parsing the untrusted body.
+ * every block start and end lands on that boundary, and a block is delivered
+ * iff its whole block fits inside the content that was sent — computed from the
+ * known block lengths and positions, never by re-parsing the untrusted body.
  *
- * This keeps source IDs as structured metadata: a blank-line paragraph inside
- * another source's body (for example a `[2]\nTitle:` mention in source 1) can
- * never be mistaken for a delivered source, and a source dropped by truncation
- * is excluded. The set stays consistent with what the model actually received.
+ * Delivery is expressed as a *count of leading blocks* rather than as a set of
+ * source IDs because source IDs do not identify a block: two results whose
+ * normalized URLs are equal share one ID (that is the point of URL dedup), so a
+ * `Set<number>` of delivered IDs would report both blocks as delivered when only
+ * the first one survived truncation, and the re-render below would reinsert a
+ * block the model never received. Since `truncateContentPreservingStructure`
+ * only ever keeps a prefix, the delivered blocks are always `blocks[0..n)` and
+ * never an arbitrary subset, which is what makes a count the right shape.
+ *
+ * Keeping this structural also means a `[2]\nTitle:` mention or a blank-line
+ * paragraph inside another source's body can never forge a delivered block.
  *
  * @param sources structured sources in block order (see {@link toStructuredSources})
  * @param toolResultContent the (possibly truncated) content sent to the model
- * @returns the set of source IDs whose blocks were delivered
+ * @returns how many leading blocks were delivered in full
  */
-function deliveredSourceIds(sources: WebSearchSource[], toolResultContent: string): Set<number> {
-  const delivered = new Set<number>();
-  const markerLength = WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length;
+function deliveredSourceBlockCount(
+  sources: readonly WebSearchSource[],
+  toolResultContent: string,
+): number {
   const contentLength = toolResultContent.length;
-  let offset = markerLength + "\n\n".length;
+  let offset = WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length + "\n\n".length;
+  let delivered = 0;
   for (const source of sources) {
-    const block = formatSourceBlock(source);
-    const blockEnd = offset + block.length;
-    if (blockEnd <= contentLength) {
-      delivered.add(source.id);
+    const blockEnd = offset + formatSourceBlock(source).length;
+    if (blockEnd > contentLength) {
+      // Blocks are a contiguous prefix of the content, so once one stops
+      // fitting, no later block can.
+      break;
     }
+    delivered += 1;
     offset = blockEnd + "\n\n".length;
   }
   return delivered;
@@ -732,18 +743,21 @@ export class ChatOrchestrator {
     } else {
       // web_search-style: a block counts as delivered iff its whole `[id]` block
       // fits inside the content that is sent, derived from the known block
-      // lengths and positions rather than from a substring search of the
-      // (untrusted) body.
-      const deliveredIds = deliveredSourceIds(
+      // positions and the length of that content rather than from a substring
+      // search of the (untrusted) body. Delivered blocks are a prefix, so they
+      // are selected by position and not by ID (duplicate URLs share one ID).
+      const deliveredCount = deliveredSourceBlockCount(
         blocks.map((block) => block.source),
         toolResultContent,
       );
 
       const deliveredBlocks: WebSearchSource[] = [];
-      for (const block of blocks) {
-        if (!deliveredIds.has(block.source.id)) {
+      for (const [index, block] of blocks.entries()) {
+        if (index >= deliveredCount) {
           // Dropped by truncation: the model never saw this label, so the id is
-          // released for a later tool in the same turn.
+          // released for a later tool in the same turn. Releasing a duplicate
+          // URL is a no-op once its first block is committed below, because that
+          // id belongs to the earlier delivered source.
           turnSources.releaseSource(block.source.url, block.reservation);
           continue;
         }

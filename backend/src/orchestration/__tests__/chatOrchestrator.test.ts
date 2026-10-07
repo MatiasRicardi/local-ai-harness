@@ -7,6 +7,15 @@ import { createCalculatorTool } from "../../tools/calculatorTool.js";
 import { OpenAICompatibleClient, ProviderClientError } from "../../provider/client.js";
 import { AppError } from "../../utils/errorHandler.js";
 import { estimateTokens } from "../../context/token-estimate.js";
+import {
+  calculateToolResultBudget,
+  truncateContentPreservingStructure,
+} from "../../context/toolResultBudget.js";
+import {
+  WEB_SEARCH_UNTRUSTED_CONTENT_MARKER,
+  formatSourceBlock,
+  type WebSearchSource,
+} from "../../tools/webSearchFormat.js";
 import { buildUntrustedPageWrapper } from "../../tools/fetchUrlTool.js";
 
 // The untrusted-content marker injected at the top of every web-search result.
@@ -2253,5 +2262,212 @@ describe("ChatOrchestrator — cumulative turn-local sources (Step 50)", () => {
       type: "sources",
       sources: [{ id: 1, title: "Cats", url: "https://example.com/cats" }],
     });
+  });
+
+  /**
+   * Token estimate of everything the round request holds **except** the
+   * tool-result body: the base conversation, the assistant tool-call message and
+   * the mandatory omission fallback reserved as the tool result. This mirrors
+   * what `buildToolResultMessages` subtracts from the input budget, so a test can
+   * prove that the window it picked really leaves room for one block and not two
+   * instead of relying on a magic token count.
+   */
+  const fixedRoundTokens = (
+    baseMessages: unknown[],
+    call: { id: string; name: string; arguments: string },
+  ): number =>
+    estimateTokens(
+      JSON.stringify([
+        ...baseMessages,
+        {
+          role: "assistant",
+          tool_calls: [
+            {
+              id: call.id,
+              type: "function",
+              function: { name: call.name, arguments: call.arguments },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: call.id, content: TOOL_RESULT_CONTEXT_OMISSION_TEXT },
+      ]),
+    );
+
+  /**
+   * The model-facing payload the orchestrator renders once every block carries
+   * its final (reserved) id: the untrusted marker and the blocks joined by a
+   * blank line. Blocks are passed with the id they end up with, so a duplicate
+   * URL appears twice with the same `[N]` label.
+   */
+  const renderedSearchPayload = (blocks: readonly WebSearchSource[]): string =>
+    `${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${blocks.map(formatSourceBlock).join("\n\n")}`;
+
+  it("delivers only the blocks that fit when two results share one normalized URL", async () => {
+    // Two results of a single search whose normalized URLs are equal (only the
+    // fragment differs, and the fragment is dropped for dedup) share ONE stable
+    // id, so both model-facing blocks are labeled `[1]` and the SSE list carries
+    // a single source. Source ids therefore cannot say WHICH block entered the
+    // context: the budget below fits the first block but not the second, and a
+    // delivery set keyed by id would report both as delivered and let the
+    // re-render reinsert the dropped duplicate block.
+    const contextSizeTokens = 1024;
+    const firstBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#first",
+      content: "first result body",
+    };
+    const secondBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#second",
+      content: "second result body ".repeat(200),
+    };
+    const payload = renderedSearchPayload([firstBlock, secondBlock]);
+
+    const oneBlockCharacters =
+      WEB_SEARCH_UNTRUSTED_CONTENT_MARKER.length +
+      "\n\n".length +
+      formatSourceBlock(firstBlock).length;
+    const twoBlockCharacters =
+      oneBlockCharacters + "\n\n".length + formatSourceBlock(secondBlock).length;
+    const budget = calculateToolResultBudget({
+      maxTokens: contextSizeTokens,
+      messageTokens: fixedRoundTokens([userMessage("x")], {
+        id: "call_1",
+        name: "web_search",
+        arguments: "{}",
+      }),
+      toolResultCharacters: payload.length,
+    });
+    // The window under test really is the intended one: one whole block fits and
+    // the second one does not.
+    expect(budget.truncated).toBe(true);
+    expect(budget.includedToolCharacters).toBeGreaterThanOrEqual(oneBlockCharacters);
+    expect(budget.includedToolCharacters).toBeLessThan(twoBlockCharacters);
+
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        // The tool labels its own results `[1]`/`[2]`; both URLs resolve to the
+        // same turn-local id, so both blocks are re-rendered as `[1]`.
+        { id: 1, title: firstBlock.title, url: firstBlock.url, content: firstBlock.content },
+        { id: 2, title: secondBlock.title, url: secondBlock.url, content: secondBlock.content },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens,
+      }),
+    );
+
+    // The model-facing `role: "tool"` content is the marker plus the first block.
+    const sent = sentToolContent(calls[1].messages);
+    expect(sent).toBe(`${WEB_SEARCH_UNTRUSTED_CONTENT_MARKER}\n\n${formatSourceBlock(firstBlock)}`);
+    // The dropped duplicate never reappears in the re-render: its URL and body
+    // are gone and the shared `[1]` label occurs exactly once.
+    expect(sent).not.toContain("#second");
+    expect(sent).not.toContain(secondBlock.content);
+    expect(sentLabels(calls[1].messages)).toEqual([1]);
+
+    // SSE stays deduplicated to the single source, carrying the shared id.
+    expect(twoSourcesEvent(events)).toEqual([
+      {
+        type: "sources",
+        sources: [{ id: 1, title: "A", url: "https://a.example/one#first" }],
+      },
+    ]);
+
+    // The re-render never outgrows the budgeted payload: the sent content is at
+    // most the truncated content and stays inside the character allowance.
+    const truncated = truncateContentPreservingStructure(
+      payload,
+      budget.includedToolCharacters,
+    );
+    expect(sent.length).toBeLessThanOrEqual(truncated.length);
+    expect(sent.length).toBeLessThanOrEqual(budget.includedToolCharacters);
+
+    // The round the provider actually receives stays inside the target.
+    expect(estimateTokens(JSON.stringify(calls[1].messages))).toBeLessThanOrEqual(
+      Math.floor(contextSizeTokens * 0.9),
+    );
+  });
+
+  it("keeps both duplicate blocks when both fit and still dedups the SSE source", async () => {
+    // The other half of the same situation: when both blocks fit, both stay in
+    // front of the model (that is not what this fix changes) and the cumulative
+    // SSE list still collapses them into one source with one id, while the
+    // request stays inside the configured context target.
+    const contextSizeTokens = 4096;
+    const firstBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#first",
+      content: "first result body",
+    };
+    const secondBlock: WebSearchSource = {
+      id: 1,
+      title: "A",
+      url: "https://a.example/one#second",
+      content: "second result body",
+    };
+    const payload = renderedSearchPayload([firstBlock, secondBlock]);
+    const budget = calculateToolResultBudget({
+      maxTokens: contextSizeTokens,
+      messageTokens: fixedRoundTokens([userMessage("x")], {
+        id: "call_1",
+        name: "web_search",
+        arguments: "{}",
+      }),
+      toolResultCharacters: payload.length,
+    });
+    expect(budget.truncated).toBe(false);
+
+    const registry = createRegistry();
+    registry.register(
+      multiSearchTool([
+        { id: 1, title: firstBlock.title, url: firstBlock.url, content: firstBlock.content },
+        { id: 2, title: secondBlock.title, url: secondBlock.url, content: secondBlock.content },
+      ]),
+    );
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_1", "web_search"),
+      ...plainAnswer("done"),
+    ]);
+
+    const events = await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+        contextSizeTokens,
+      }),
+    );
+
+    // Nothing was dropped, so the payload reaches the model unchanged and both
+    // blocks carry the shared `[1]` label.
+    const sent = sentToolContent(calls[1].messages);
+    expect(sent).toBe(payload);
+    expect(sentLabels(calls[1].messages)).toEqual([1, 1]);
+
+    // One URL, one source, one id.
+    expect(twoSourcesEvent(events)).toEqual([
+      {
+        type: "sources",
+        sources: [{ id: 1, title: "A", url: "https://a.example/one#first" }],
+      },
+    ]);
+
+    expect(estimateTokens(JSON.stringify(calls[1].messages))).toBeLessThanOrEqual(
+      Math.floor(contextSizeTokens * 0.9),
+    );
   });
 });

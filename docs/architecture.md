@@ -310,11 +310,16 @@ model reads is byte-identical to the `id` of that source in the `sources` event.
 from one turn-local accumulator shared by every tool of the turn (`web_search` blocks and
 `fetch_url` pages alike), which reserves an id atomically and keys it by normalized URL
 (WHATWG serialization with the fragment dropped, query/path/trailing slash preserved), so
-several results of a single call never share a label, ids stay unique across the whole
+distinct URLs of a single call never share a label, ids stay unique across the whole
 turn even when they cross a digit boundary (`[9]` → `[10]`), and a URL delivered by an
-earlier tool keeps its original id instead of getting a second label. A source is reported
-only when its text really entered the model context — a search block when the whole `[N]`
-block survives context truncation, a fetched page when at least one character past the
+earlier tool keeps its original id instead of getting a second label. Two results of one
+call whose normalized URLs are equal deliberately share a single id (that is the dedup),
+so an id identifies a *source*, never a specific block. Which blocks entered the model
+context is therefore decided by their known positions in the rendered payload measured
+against the length of the content that was actually sent — truncation only ever keeps a
+prefix, so delivered blocks are always a leading run — and never by source id. A source is
+reported only when its text really entered the model context — a search block when the whole
+`[N]` block survives context truncation, a fetched page when at least one character past the
 harness-authored `<page-content>` prefix survives it — and blocks dropped by truncation
 give their ids back to the accumulator. Each `sources` event carries the complete
 cumulative list of the turn (the frontend replaces `message.sources` per event), so a tool
