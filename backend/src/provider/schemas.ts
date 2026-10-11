@@ -220,6 +220,8 @@ export type WebSearchConfig = z.infer<typeof webSearchSchema>;
  */
 export const toolsSchema = z.object({
   calculator: z.boolean().optional(),
+  // fetch_url (Step 50): opt-in, no credentials, off by default.
+  fetchUrl: z.boolean().optional(),
 });
 
 export type ToolsConfig = z.infer<typeof toolsSchema>;

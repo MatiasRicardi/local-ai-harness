@@ -118,6 +118,14 @@ model invokes `web_search`.
 - **Prompt-injection and external links.** Because results are untrusted, they carry a
   prompt-injection risk and contain external links. Sources are rendered as links the user
   can open, and result content is sanitized.
+- **Source attribution comes from harness metadata.** The `[N]` label the model sees in a
+  tool result and the `id` of the matching entry in the `sources` event are both assigned
+  by the backend (a turn-local counter, reserved atomically per normalized URL), never
+  taken from model- or page-supplied text. A remote page cannot rename itself, claim
+  another page's id, or make itself look delivered: whether a source actually reached the
+  model is decided from byte offsets the harness wrote around the remote content (and from
+  complete block boundaries), never by searching the remote text for a URL, a title or a
+  wrapper marker.
 
 ## Out of scope (by design)
 
