@@ -176,10 +176,10 @@ no OCR).
   / `BuiltInToolSettings` cards plus the
   sticky `ConnectionTestFooter` inside one `<form>` (the footer button submits
   it).
-- `ConnectionSettings.vue`, `RuntimeSettings.vue`, `WebSearchSettings.vue`,
-  `BuiltInToolSettings.vue` — presentational cards bound to that draft with
-  `v-model`; they hold no state of their own (built-in tools read the
-  `useToolSettings` singleton).
+- `ConnectionSettings.vue`, `RuntimeSettings.vue` — presentational cards bound
+  to that draft with `v-model`; they hold no state of their own.
+- `WebSearchSettings.vue`, `BuiltInToolSettings.vue` — views over the
+  `useWebSearchSettings` / `useToolSettings` singletons; not bound to the draft.
 - `ConnectionTestFooter.vue` — sticky "Test Connection" submit button and the
   `.status.testing` / `.status.success` / `.status.error` result panels.
 - `ChatMessages.vue`, `ChatInput.vue`, `ChatEmptyState.vue`,
