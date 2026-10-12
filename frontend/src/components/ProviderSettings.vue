@@ -4,6 +4,7 @@ import AppIcon from "./AppIcon.vue"
 import ConnectionSettings from "./ConnectionSettings.vue"
 import RuntimeSettings from "./RuntimeSettings.vue"
 import WebSearchSettings from "./WebSearchSettings.vue"
+import BuiltInToolSettings from "./BuiltInToolSettings.vue"
 import ConnectionTestFooter from "./ConnectionTestFooter.vue"
 import {
   clampContextSize,
@@ -146,6 +147,8 @@ function handleTest(): void {
         />
 
         <WebSearchSettings />
+
+        <BuiltInToolSettings />
       </div>
 
       <ConnectionTestFooter

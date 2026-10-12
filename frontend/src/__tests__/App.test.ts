@@ -4,6 +4,7 @@ import { nextTick } from "vue"
 import App from "../App.vue"
 import { getProviderSettings, updateProviderSettings } from "../composables/useProviderSettings"
 import { useWebSearchSettings } from "../composables/useWebSearchSettings"
+import { useToolSettings } from "../composables/useToolSettings"
 import type { WebSearchRequestConfig } from "../services/chat"
 import { uploadDocument } from "../services/files"
 import { FrontendApiError } from "../types/error"
@@ -50,6 +51,7 @@ type StreamCall = [
     document?: { fileId: string; filename: string; text: string }
     context?: { maxTokens: number }
     webSearch?: WebSearchRequestConfig
+    tools?: { calculator?: boolean; fetchUrl?: boolean }
   },
 ]
 
@@ -100,6 +102,11 @@ describe("App integration", () => {
       apiKey: "",
       searchDepth: "basic",
       maxResults: 5,
+    })
+    // Reset the built-in tool settings singleton, which persists across tests.
+    useToolSettings().updateToolSettings({
+      calculatorEnabled: false,
+      fetchUrlEnabled: false,
     })
     confirmMock = vi.fn(() => true)
     Object.defineProperty(window, "confirm", {
@@ -426,6 +433,108 @@ describe("App integration", () => {
         searchDepth: "basic",
         maxResults: 3,
       })
+    })
+  })
+
+  describe("built-in tool settings", () => {
+    it("sends only the calculator tool when enabled", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: true, fetchUrlEnabled: false })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with calculator")
+
+      const [, , , options] = streamCall()
+      expect(options.tools).toEqual({ calculator: true })
+    })
+
+    it("sends only the fetch URL tool when enabled", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: false, fetchUrlEnabled: true })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with fetch")
+
+      const [, , , options] = streamCall()
+      expect(options.tools).toEqual({ fetchUrl: true })
+    })
+
+    it("sends both tools when enabled", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: true, fetchUrlEnabled: true })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "with both")
+
+      const [, , , options] = streamCall()
+      expect(options.tools).toEqual({ calculator: true, fetchUrl: true })
+    })
+
+    it("omits tools entirely when disabled (default)", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: false, fetchUrlEnabled: false })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "no tools")
+
+      const [, , , options] = streamCall()
+      expect(options.tools).toBeUndefined()
+    })
+
+    it("applies a changed toggle to the next message immediately", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: true, fetchUrlEnabled: false })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "first")
+      expect(streamCall()[3].tools).toEqual({ calculator: true })
+
+      // Complete the first (mocked) stream so the send button comes back.
+      hoisted.callbacks.onStart("m", {})
+      hoisted.callbacks.onDone("m", {}, {})
+      await nextTick()
+
+      // Toggle off and send again: the new value takes effect on the next call.
+      useToolSettings().updateToolSettings({ calculatorEnabled: false, fetchUrlEnabled: false })
+      await sendMessage(wrapper, "second")
+      // Second streamChat() call (index 1); the first (index 0) kept calculator on.
+      expect(streamCall(1)[3].tools).toBeUndefined()
+    })
+
+    it("keeps built-in tool settings independent from web search", async () => {
+      useWebSearchSettings().updateWebSearchSettings({
+        enabled: true,
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 3,
+      })
+      useToolSettings().updateToolSettings({ calculatorEnabled: true, fetchUrlEnabled: false })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "both")
+
+      const [, , , options] = streamCall()
+      expect(options.webSearch).toMatchObject({ provider: "tavily" })
+      expect(options.tools).toEqual({ calculator: true })
+    })
+
+    it("keeps built-in tool settings across a New Conversation reset", async () => {
+      useToolSettings().updateToolSettings({ calculatorEnabled: true, fetchUrlEnabled: true })
+      wrapper = mountApp()
+
+      await sendMessage(wrapper, "first")
+      const firstOptions = streamCall()[3]
+
+      hoisted.callbacks.onStart("m", {})
+      hoisted.callbacks.onDone("m", {}, {})
+      await nextTick()
+
+      await wrapper
+        .find("button[aria-label='Start a new conversation']")
+        .trigger("click")
+      await nextTick()
+
+      await sendMessage(wrapper, "second")
+      // Second streamChat() call (index 1); the first (index 0) kept tools on.
+      const secondOptions = streamCall(1)[3]
+
+      expect(firstOptions.tools).toEqual(secondOptions.tools)
+      expect(secondOptions.tools).toEqual({ calculator: true, fetchUrl: true })
     })
   })
 

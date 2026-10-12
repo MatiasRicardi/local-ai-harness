@@ -135,6 +135,44 @@ export interface StreamEvent {
   }
 }
 
+/**
+ * The exact `tools` payload sent with a chat request when a built-in tool is
+ * enabled. Every field is optional and OFF by default: an omitted field means
+ * that tool is not registered for the request, so `calculator` and `fetchUrl`
+ * can be toggled independently. `buildToolsPayload` builds this object from the
+ * settings layer and returns `undefined` when neither tool is active, so the
+ * caller can omit `tools` entirely and keep the streaming path untouched.
+ */
+export interface ChatRequestTools {
+  calculator?: boolean
+  fetchUrl?: boolean
+}
+
+/**
+ * Project the built-in tool settings into the request payload.
+ *
+ * Returns `undefined` when no built-in tool is enabled so the caller can omit
+ * the `tools` field entirely (no ToolRegistry → normal progressive streaming).
+ * Otherwise only the enabled tools are included, so an active tool is never
+ * sent as an explicit `false`.
+ */
+export function buildToolsPayload(settings: {
+  calculatorEnabled: boolean
+  fetchUrlEnabled: boolean
+}): ChatRequestTools | undefined {
+  if (!settings.calculatorEnabled && !settings.fetchUrlEnabled) {
+    return undefined
+  }
+  const tools: ChatRequestTools = {}
+  if (settings.calculatorEnabled) {
+    tools.calculator = true
+  }
+  if (settings.fetchUrlEnabled) {
+    tools.fetchUrl = true
+  }
+  return tools
+}
+
 export interface StreamCallbacks {
   onStart: (model: string, context?: ContextTruncationMetadata) => void
   onDelta: (text: string) => void
@@ -161,6 +199,7 @@ export async function streamChat(
     context?: ChatContext
     webSearch?: WebSearchRequestConfig
     runtimeContext?: RuntimeContext
+    tools?: ChatRequestTools
   },
 ): Promise<void> {
   const apiUrl = `${API_BASE}/api/chat/stream`
@@ -188,6 +227,12 @@ export async function streamChat(
     // legacy request body intact when the feature is unused.
     if (options?.webSearch) {
       requestBody.webSearch = options.webSearch
+    }
+    // Only include `tools` when at least one built-in tool is enabled: omitting
+    // the field keeps the legacy request body intact and the progressive
+    // streaming path untouched when no tool is active.
+    if (options?.tools) {
+      requestBody.tools = options.tools
     }
 
     const response = await fetch(apiUrl, {
