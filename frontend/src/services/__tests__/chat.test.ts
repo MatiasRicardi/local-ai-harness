@@ -6,6 +6,7 @@ import {
   isValidSourceUrl,
   sanitizeSourcesForDisplay,
   buildWebSearchPayload,
+  buildToolsPayload,
   type RuntimeContext,
 } from "../chat"
 import { API_BASE } from "../apiBase"
@@ -508,6 +509,101 @@ describe("buildWebSearchPayload", () => {
         maxResults: 3,
       }),
     ).toMatchObject({ provider: "tavily" })
+  })
+})
+
+describe("buildToolsPayload", () => {
+  it("returns undefined when no built-in tool is enabled", () => {
+    expect(
+      buildToolsPayload({ calculatorEnabled: false, fetchUrlEnabled: false }),
+    ).toBeUndefined()
+  })
+
+  it("projects only the calculator tool when enabled", () => {
+    expect(
+      buildToolsPayload({ calculatorEnabled: true, fetchUrlEnabled: false }),
+    ).toEqual({ calculator: true })
+  })
+
+  it("projects only the fetch URL tool when enabled", () => {
+    expect(
+      buildToolsPayload({ calculatorEnabled: false, fetchUrlEnabled: true }),
+    ).toEqual({ fetchUrl: true })
+  })
+
+  it("projects both tools when enabled", () => {
+    expect(
+      buildToolsPayload({ calculatorEnabled: true, fetchUrlEnabled: true }),
+    ).toEqual({ calculator: true, fetchUrl: true })
+  })
+
+  it("never sends an explicit false for a disabled tool", () => {
+    expect(
+      buildToolsPayload({ calculatorEnabled: true, fetchUrlEnabled: false }),
+    ).not.toHaveProperty("fetchUrl")
+    expect(
+      buildToolsPayload({ calculatorEnabled: false, fetchUrlEnabled: true }),
+    ).not.toHaveProperty("calculator")
+  })
+})
+
+describe("tools request serialization", () => {
+  const messages = [{ role: "user" as const, content: "hello" }]
+
+  function requestBodyOf(call: unknown[]): Record<string, unknown> {
+    const init = call[1] as { body: string }
+    return JSON.parse(init.body)
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  describe("streamChat()", () => {
+    it("serializes tools when at least one built-in tool is enabled", async () => {
+      vi.mocked(fetch).mockResolvedValue(okResponse(sseStream([])))
+
+      await streamChat(messages, provider, noopCallbacks() as unknown as StreamCallbacks, {
+        tools: { calculator: true },
+      })
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect(body.tools).toEqual({ calculator: true })
+    })
+
+    it("omits tools entirely when undefined", async () => {
+      vi.mocked(fetch).mockResolvedValue(okResponse(sseStream([])))
+
+      await streamChat(messages, provider, noopCallbacks() as unknown as StreamCallbacks)
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect("tools" in body).toBe(false)
+    })
+
+    it("keeps web search and tools as independent payloads", async () => {
+      vi.mocked(fetch).mockResolvedValue(okResponse(sseStream([])))
+
+      const webSearch = buildWebSearchPayload({
+        enabled: true,
+        provider: "tavily",
+        apiKey: "tly-abc",
+        searchDepth: "basic",
+        maxResults: 3,
+      })
+
+      await streamChat(messages, provider, noopCallbacks() as unknown as StreamCallbacks, {
+        webSearch,
+        tools: { fetchUrl: true },
+      })
+
+      const body = requestBodyOf(vi.mocked(fetch).mock.calls[0])
+      expect(body.webSearch).toMatchObject({ provider: "tavily" })
+      expect(body.tools).toEqual({ fetchUrl: true })
+    })
   })
 })
 

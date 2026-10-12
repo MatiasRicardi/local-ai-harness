@@ -3,6 +3,7 @@ import { ref, computed } from "vue"
 import {
   streamChat,
   buildWebSearchPayload,
+  buildToolsPayload,
   type ChatMessage,
   type ChatProviderConfig,
   type StreamCallbacks,
@@ -10,6 +11,7 @@ import {
 } from "./services/chat"
 import { useProviderSettings } from "./composables/useProviderSettings"
 import { useWebSearchSettings } from "./composables/useWebSearchSettings"
+import { useToolSettings } from "./composables/useToolSettings"
 import ProviderSettings from "./components/ProviderSettings.vue"
 import AppHeader from "./components/AppHeader.vue"
 import ChatMessages from "./components/ChatMessages.vue"
@@ -62,6 +64,7 @@ const { status: connectionStatus } = useConnectionTest()
 
 const providerSettings = useProviderSettings()
 const webSearchSettings = useWebSearchSettings()
+const toolsSettings = useToolSettings()
 
 // Presentation-only summaries. They describe what the user configured, never a
 // live connection state (that stays inside ProviderSettings' Test Connection).
@@ -393,11 +396,21 @@ async function handleSend(text: string) {
     // timezone change. Omitted entirely when no usable IANA timezone is
     // available; chat keeps working regardless.
     const runtimeContext = buildRuntimeContext()
+    // Built-in tools are opt-in and independent from web search: read the
+    // current toggle values at request time so a change to either toggle takes
+    // effect on the next message. `buildToolsPayload` returns `undefined` when
+    // no tool is enabled, so `tools` is omitted and the streaming path stays
+    // untouched.
+    const tools = buildToolsPayload({
+      calculatorEnabled: toolsSettings.settings.value.calculatorEnabled,
+      fetchUrlEnabled: toolsSettings.settings.value.fetchUrlEnabled,
+    })
     await streamChat(allMessages, provider, callbacks, {
       signal,
       document,
       context,
       webSearch,
+      tools,
       runtimeContext,
     })
   } catch (err) {

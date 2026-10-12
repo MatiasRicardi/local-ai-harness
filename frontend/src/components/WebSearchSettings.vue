@@ -71,8 +71,9 @@ function onMaxResultsInput(event: Event): void {
     </div>
 
     <p id="web-search-hint" class="field-hint">
-      Lets the model search the web with Tavily. One search per message; pages
-      are not fetched.
+      Searches the web for current information and returns results from Tavily.
+      Enable the Fetch URL tool separately to let the model read specific public
+      pages.
     </p>
 
     <div class="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-2.5 py-1.5">

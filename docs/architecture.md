@@ -153,6 +153,12 @@ no OCR).
   `clampContextSize()` used by the context control.
 - `useWebSearchSettings.ts` — persists Tavily web-search settings (API key only;
   the base URL stays backend configuration) to `localStorage`.
+- `useToolSettings.ts` — persists the built-in tool toggles (`calculator`,
+  `fetch_url`) to `localStorage`. Both default off and are fully independent of
+  the web-search settings (not nested under it). Only real `boolean` values are
+  accepted; any non-boolean stored value falls back to `false` instead of being
+  coerced through truthiness, so a corrupted field can never turn a tool on
+  unexpectedly. Storage failures are swallowed so they can never break chat.
 - `useConnectionTest.ts` — result of the explicit "Test Connection" action
   (`""` / `testing` / `success` / `error` + message), shared between the sidebar
   footer and the header status dot. It is never polled: the status stays empty
@@ -166,12 +172,14 @@ no OCR).
   settings, and the new-conversation button.
 - `ProviderSettings.vue` — the settings sidebar. Owns the settings draft, the
   debounced persistence and the cleartext-HTTP warning, and renders the
-  `ConnectionSettings` / `RuntimeSettings` / `WebSearchSettings` cards plus the
+  `ConnectionSettings` / `RuntimeSettings` / `WebSearchSettings`
+  / `BuiltInToolSettings` cards plus the
   sticky `ConnectionTestFooter` inside one `<form>` (the footer button submits
   it).
-- `ConnectionSettings.vue`, `RuntimeSettings.vue`, `WebSearchSettings.vue` —
-  presentational cards bound to that draft with `v-model`; they hold no state
-  of their own (web search reads the `useWebSearchSettings` singleton).
+- `ConnectionSettings.vue`, `RuntimeSettings.vue` — presentational cards bound
+  to that draft with `v-model`; they hold no state of their own.
+- `WebSearchSettings.vue`, `BuiltInToolSettings.vue` — views over the
+  `useWebSearchSettings` / `useToolSettings` singletons; not bound to the draft.
 - `ConnectionTestFooter.vue` — sticky "Test Connection" submit button and the
   `.status.testing` / `.status.success` / `.status.error` result panels.
 - `ChatMessages.vue`, `ChatInput.vue`, `ChatEmptyState.vue`,
@@ -251,6 +259,10 @@ conversation), and its exact content is counted against the context budget.
    search for that…" before deciding whether to call a tool, and that
    preliminary text is discarded rather than shown (see
    [Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)).
+   Built-in tools follow the same buffering model: the client sends
+   `tools: { calculator?: boolean; fetchUrl?: boolean }` (only the enabled tools,
+   never an explicit `false`) on the streaming request, so when either built-in
+   tool is on the first model round is buffered exactly like web search.
    Each tool execution is orchestrated and its lifecycle is exposed as
    structured SSE events between `start` and the final answer: `tool_start`
    (tool name only, emitted only after the arguments validate and immediately
