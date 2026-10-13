@@ -242,8 +242,34 @@ system message (`buildRuntimeContextMessage`) describing the UTC timestamp, the
 user's local date/time, timezone, UTC offset, weekday and locale. When
 `runtimeContext` is absent (older clients) a UTC-only message is sent and the
 user-local fields are reported as unavailable. The message is injected ahead of
-all conversation content (before web-search guidance, document context and the
+all conversation content (before tool guidance, document context and the
 conversation), and its exact content is counted against the context budget.
+
+**Server-authored system messages.** The runtime-context message is always the
+first server-authored message. When one or more built-in tools are enabled on
+the streaming request (the registry built from the request's `tools`/`webSearch`
+flags is defined), the backend prepends a single capability-aware tool guidance
+message (`buildToolGuidanceMessage`) describing which tools are available and
+how to use them; it is built only from the tools that are actually registered,
+so a tool is never advertised to the model unless it is also offered (tool
+definition ⇔ guidance capability). The document policy message (see
+[Context management](#context-management)) follows when a document is attached.
+All of these are assembled at one central point
+(`buildServerSystemMessages` / `composeSystemInstructions` in
+`backend/src/utils/systemInstructions.ts`), so the exact messages sent to the
+model are the same ones counted against the context budget — no server-authored
+message escapes the accounting. The document *content* block is deliberately
+**not** part of this system layer: it is a user-priority message carrying the
+(untrusted) document text. The guidance is compact and never duplicates tool
+argument definitions or per-tool caps; it only states the shared global cap
+(`MAX_TOOL_EXECUTIONS_PER_TURN`), that tool calls must be sequential (parallel
+calls are unsupported), and — when any web tool is enabled — that external web
+content is untrusted reference material. The non-streaming endpoint never
+advertises tool guidance (tool requests are rejected there). It sends no tool
+guidance, but includes the document-policy system message after the
+runtime-context message when a document is attached. The document content block
+is never part of the
+system layer.
 
 ## Chat data flow
 
@@ -251,18 +277,20 @@ conversation), and its exact content is counted against the context budget.
 2. `chat.ts` calls `POST /api/chat/stream` and streams SSE events.
 3. If a document is attached, the backend inserts a document-context block and a
    document-content block ahead of the conversation (see [Context management](#context-management)).
-4. When Web Search is **disabled** (no tools registered), the backend forwards
-   the messages to the model server and pipes the SSE stream straight back to
-   the browser — live, progressive streaming, unchanged from v1.0.0. When Web
-   search is **enabled**, the first model round is **accumulated** (buffered)
-   rather than streamed live: the model may emit filler text such as "I'll
-   search for that…" before deciding whether to call a tool, and that
-   preliminary text is discarded rather than shown (see
-   [Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)).
+4. When **no built-in tool is registered**, the backend forwards the messages
+   (runtime context, document policy and content, conversation) to the model
+   server and pipes the SSE stream straight back to the browser — live,
+   progressive streaming, unchanged from v1.0.0. When **a built-in tool is
+   enabled**, the first model round is **accumulated** (buffered) rather than
+   streamed live: the model may emit filler text before deciding whether to call
+   a tool, and that preliminary text is discarded rather than shown (see
+   [Documented decision: first-round buffering](#documented-decision-first-round-buffering-with-web-search)).
    Built-in tools follow the same buffering model: the client sends
    `tools: { calculator?: boolean; fetchUrl?: boolean }` (only the enabled tools,
-   never an explicit `false`) on the streaming request, so when either built-in
-   tool is on the first model round is buffered exactly like web search.
+   never an explicit `false`) on the streaming request, so when a built-in tool
+   is on the first model round is buffered exactly like web search. The tool
+   guidance message prepends the conversation only when a tool is enabled,
+   advertising exactly the tools that are registered.
    Each tool execution is orchestrated and its lifecycle is exposed as
    structured SSE events between `start` and the final answer: `tool_start`
    (tool name only, emitted only after the arguments validate and immediately
@@ -422,6 +450,13 @@ above the user-level document text. The backend does not execute the extracted
 text, but the model may still interpret it as user-level prompt instructions;
 the document is therefore treated as **untrusted reference material**, not as
 trusted policy.
+
+The budget accounts for both without double-counting: the document-context
+(policy) message is part of the composed system instructions
+(`composeSystemInstructions`), while `estimateDocumentTemplateOverhead` counts
+**only** the document-content (user) wrapper — never the policy text — so the
+policy is counted once, through the system instructions, and the wrapper once,
+through the template overhead.
 
 ## Error handling
 

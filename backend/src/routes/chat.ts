@@ -7,20 +7,24 @@ import {
   AppError,
 } from "../utils/errorHandler.js";
 import { SseParser } from "../provider/sseParser.js";
+import { buildDocumentContentMessage } from "../utils/documentContext.js";
 import {
-  buildDocumentContextMessage,
-  buildDocumentContentMessage,
-} from "../utils/documentContext.js";
-import { buildRuntimeContextMessage } from "../utils/runtimeContext.js";
-import { composeSystemInstructions } from "../utils/systemInstructions.js";
-import { buildToolRegistry } from "../tools/buildToolRegistry.js";
+  buildRuntimeContextMessage,
+  buildServerSystemMessages,
+  composeSystemInstructions,
+  NO_TOOLS_CAPABILITIES,
+  type SystemMessage,
+} from "../utils/systemInstructions.js";
+import {
+  buildToolRegistry,
+  resolveToolCapabilities,
+} from "../tools/buildToolRegistry.js";
 import {
   calculateContextBudget,
   type ContextTruncationMetadata,
 } from "../context/context-budget.js";
 import { config } from "../config/env.js";
 import { ChatOrchestrator } from "../orchestration/chatOrchestrator.js";
-import { buildWebSearchGuidanceMessage } from "../utils/webSearchPrompt.js";
 
 /**
  * Sanitize untrusted SSE data from providers.
@@ -33,21 +37,22 @@ function sanitizeSseData(text: string): string {
 }
 
 /**
- * Build the message list with document context if present.
+ * Build the full provider message list with document context.
  *
- * The document text passed here should already be truncated (if needed)
- * by the context budget calculation.
+ * The server-authored system messages (runtime context, tool guidance, and
+ * document policy) are assembled by the single central point and kept in the
+ * privileged layer; the document *content* is a user-priority message and is
+ * placed just after them, ahead of the conversation. The same list is used
+ * for both the streaming and non-streaming endpoints.
  */
-function buildAllMessages(
-  document: { fileId: string; filename: string; text: string } | undefined,
+function buildProviderMessages(
+  serverMessages: SystemMessage[],
+  documentUserMessage: { role: "user"; content: string } | undefined,
   messages: ChatMessage[],
 ): ChatMessage[] {
-  if (!document) {
-    return messages;
-  }
   return [
-    buildDocumentContextMessage(document),
-    buildDocumentContentMessage(document),
+    ...serverMessages,
+    ...(documentUserMessage ? [documentUserMessage] : []),
     ...messages,
   ];
 }
@@ -76,18 +81,36 @@ const chat: FastifyPluginAsync = async (server) => {
     const { provider, messages, document, context, runtimeContext } = result.data;
     const client = new OpenAICompatibleClient(provider.baseUrl);
 
-    // Server-authored runtime context: the authoritative current instant plus
-    // the user's timezone/locale. Built from the backend clock per request; a
-    // client can never forge "now". Included in budgeting so its tokens count.
-    const runtimeContextMessage = buildRuntimeContextMessage(runtimeContext);
-
     // Determine context size (default 32768 if not provided)
     const contextSizeTokens = context?.maxTokens ?? 32768;
 
-    // Calculate context budget before contacting provider
+    // Server-authored runtime context: the authoritative current instant plus
+    // the user's timezone/locale. Built from the backend clock per request; a
+    // client can never forge "now". Built once and reused for the budget and
+    // the request.
+    const runtimeContextMessage = buildRuntimeContextMessage(runtimeContext);
+
+    // Built-in tools are only supported on the streaming endpoint, so the
+    // non-streaming request never advertises tool guidance.
+    const capabilities = NO_TOOLS_CAPABILITIES;
+
+    // Server-authored system messages assembled once at the central point. The
+    // document policy message only depends on the filename (stable across
+    // truncation), so it can be built and budgeted before the document text is
+    // truncated.
+    const serverMessages = buildServerSystemMessages({
+      runtimeContextMessage,
+      capabilities,
+      document,
+    });
+
+    // Calculate context budget before contacting provider. The budget counts
+    // exactly the server-authored system messages sent to the provider
+    // (composeSystemInstructions of the same list), so no server-authored
+    // message escapes the accounting.
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: runtimeContextMessage.content,
+      systemInstructions: composeSystemInstructions(serverMessages),
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
@@ -112,11 +135,16 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    // Build the full message list with (possibly truncated) document context
-    const documentForMessages = document
-      ? { ...document, text: budgetResult.includedDocumentText }
+    // Document content (user-priority, untrusted) uses the (possibly truncated)
+    // document text. It is never part of the server-authored system layer.
+    const documentUserMessage = document
+      ? buildDocumentContentMessage({ ...document, text: budgetResult.includedDocumentText })
       : undefined;
-    const allMessages = [runtimeContextMessage, ...buildAllMessages(documentForMessages, messages)];
+    const allMessages = buildProviderMessages(
+      serverMessages,
+      documentUserMessage,
+      messages,
+    );
 
     // Built-in tools are only supported on the streaming endpoint. Detect tool
     // availability generically through the request-scoped registry (rather than
@@ -227,24 +255,37 @@ const chat: FastifyPluginAsync = async (server) => {
     // Determine context size (default 32768 if not provided)
     const contextSizeTokens = context?.maxTokens ?? 32768;
 
-    // Build the web search guidance message once, before budget calculation so
-    // the budget accounts for the system message that the enabled-search branch
-    // prepends to the request sent to ChatOrchestrator.
-    const webSearchGuidanceMessage = buildWebSearchGuidanceMessage();
-
     // Server-authored runtime context (see the non-streaming route): built from
-    // the backend clock per request and always sent, independent of web search.
+    // the backend clock per request and always sent, independent of tools.
     const runtimeContextMessage = buildRuntimeContextMessage(runtimeContext);
 
-    // Calculate context budget before contacting provider. Budgeting mirrors
-    // exactly what is sent: the runtime message plus the web-search guidance
-    // only when the enabled-search branch actually prepends it.
+    // Build the request-scoped tool registry (undefined when no tool is
+    // enabled). Tool availability is decided from the registry itself, not from
+    // per-tool flags, so the guidance can only advertise tools that are
+    // actually registered (and thus offered to the model).
+    const toolRegistry = buildToolRegistry({
+      webSearch: result.data.webSearch,
+      tools: result.data.tools,
+    });
+    const capabilities = resolveToolCapabilities(toolRegistry);
+
+    // Server-authored system messages assembled once at the central point. The
+    // document policy message only depends on the filename (stable across
+    // truncation), so it can be built and budgeted before the document text is
+    // truncated.
+    const serverMessages = buildServerSystemMessages({
+      runtimeContextMessage,
+      capabilities,
+      document,
+    });
+
+    // Calculate context budget before contacting provider. The budget counts
+    // exactly the server-authored system messages sent to the provider
+    // (composeSystemInstructions of the same list), so no server-authored
+    // message escapes the accounting.
     const budgetResult = calculateContextBudget({
       contextSizeTokens,
-      systemInstructions: composeSystemInstructions(
-        runtimeContextMessage.content,
-        !!result.data.webSearch?.enabled,
-      ),
+      systemInstructions: composeSystemInstructions(serverMessages),
       conversationHistory: messages.slice(0, -1),
       currentUserMessage: messages[messages.length - 1].content,
       documentText: document?.text ?? null,
@@ -269,11 +310,16 @@ const chat: FastifyPluginAsync = async (server) => {
       });
     }
 
-    // Build the full message list with (possibly truncated) document context
-    const documentForMessages = document
-      ? { ...document, text: budgetResult.includedDocumentText }
+    // Document content (user-priority, untrusted) uses the (possibly truncated)
+    // document text. It is never part of the server-authored system layer.
+    const documentUserMessage = document
+      ? buildDocumentContentMessage({ ...document, text: budgetResult.includedDocumentText })
       : undefined;
-    const allMessages = buildAllMessages(documentForMessages, messages);
+    const allMessages = buildProviderMessages(
+      serverMessages,
+      documentUserMessage,
+      messages,
+    );
 
     // Cancellation signal for the upstream provider request, driven by the client
     // connection. Fastify's `request.signal` cannot be used here: it is wired to the
@@ -314,26 +360,15 @@ const chat: FastifyPluginAsync = async (server) => {
 
     // Build the request-scoped tool registry (undefined when no tool is
     // enabled, keeping the plain v1.0.0 streaming path). Tool availability is
-    // decided from the registry itself, not from a per-tool flag.
-    const toolRegistry = buildToolRegistry({
-      webSearch: result.data.webSearch,
-      tools: result.data.tools,
-    });
-
+    // decided from the registry itself, not from a per-tool flag. It was
+    // already built above so its capabilities drive the guidance.
     try {
       if (toolRegistry) {
         // A tool is enabled: run the turn through the single-tool orchestrator.
-        // The safety guidance is prepended as a system message, and the tool
-        // registry is request-scoped. Internal tool-call/tool-result messages and
-        // the search results never surface as visible assistant text.
-        const orchestratedMessages = [
-          runtimeContextMessage,
-          // Only tell the model web search is available when it is actually
-          // registered; a calculator-only request must not advertise it.
-          ...(result.data.webSearch?.enabled ? [webSearchGuidanceMessage] : []),
-          ...allMessages,
-        ];
-
+        // The server-authored system messages (runtime context, tool guidance,
+        // document policy) are prepended, and the tool registry is
+        // request-scoped. Internal tool-call/tool-result messages and the
+        // search results never surface as visible assistant text.
         const orchestrator = new ChatOrchestrator(client);
         for await (const event of orchestrator.stream({
           providerConfig: {
@@ -342,7 +377,7 @@ const chat: FastifyPluginAsync = async (server) => {
             apiKey: provider.apiKey,
             timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
           },
-          messages: orchestratedMessages,
+          messages: allMessages,
           tools: toolRegistry,
           signal: clientDisconnect.signal,
           contextSizeTokens,
@@ -391,7 +426,7 @@ const chat: FastifyPluginAsync = async (server) => {
           apiKey: provider.apiKey,
           timeoutMs: provider.timeoutMs ?? config.DEFAULT_PROVIDER_TIMEOUT_MS,
         },
-        [runtimeContextMessage, ...allMessages],
+        allMessages,
         { signal: clientDisconnect.signal },
       );
 

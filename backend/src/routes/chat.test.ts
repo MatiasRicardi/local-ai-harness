@@ -866,7 +866,9 @@ describe("runtime context integration", () => {
       // [0] = runtime context, [1] = web-search guidance, [2] = user.
       expect(messages![0].role).toBe("system");
       expect(messages![0].content).toContain("Current runtime context:");
-      expect(messages![1].content).toContain("Web search is available");
+      // [1] = tool guidance (capability-aware), [2] = user.
+      expect(messages![1].content).toContain("web_search");
+      expect(messages![1].content).toContain("untrusted reference material");
       expect(messages![2].content).toBe("Hello");
     });
 
@@ -937,8 +939,14 @@ describe("runtime context integration", () => {
       const messages = capturedMessages as Array<{ content: string }>;
       // The model must not be told web search is available when it is not
       // registered: an unregistered web_search call would be rejected as
-      // TOOL_NOT_FOUND by the orchestrator.
-      expect(messages.some((m) => m.content.includes("Web search is available"))).toBe(
+      // TOOL_NOT_FOUND by the orchestrator. A calculator-only request advertises
+      // calculator but never web_search.
+      expect(messages.some((m) => m.content.includes("web_search"))).toBe(false);
+      expect(messages.some((m) => m.content.includes("calculator"))).toBe(true);
+      // Runtime context stays present and separate from the guidance.
+      expect(messages.some((m) => m.content.includes("Current runtime context:"))).toBe(true);
+      // No untrusted web warning without a web tool.
+      expect(messages.some((m) => m.content.includes("untrusted reference material"))).toBe(
         false,
       );
     });

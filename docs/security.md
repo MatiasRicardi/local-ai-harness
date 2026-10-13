@@ -127,6 +127,34 @@ model invokes `web_search`.
   complete block boundaries), never by searching the remote text for a URL, a title or a
   wrapper marker.
 
+### 10. Server-authored system messages
+
+All privileged `system` messages are authored by the backend and assembled at a
+single point (`buildServerSystemMessages` / `composeSystemInstructions` in
+`backend/src/utils/systemInstructions.ts`), so the messages sent to the model are
+exactly the messages counted against the context budget — no server-authored
+message escapes the accounting:
+
+- **Runtime context** is always the first system message and is generated from
+  the backend clock (never a client-provided "now"), so the model cannot forge
+  the current instant.
+- **Tool guidance** is a single capability-aware message built only from the
+  tools that are actually registered on the request. A tool is advertised to the
+  model **only** when it is also registered and offered (tool definition ⇔
+  guidance capability), so the model is never told a tool exists when a call to
+  it would be rejected. It is sent only on the streaming endpoint; the
+  non-streaming endpoint rejects tool requests and advertises none. Guidance
+  states only the shared global execution cap and that calls must be sequential;
+  it never duplicates tool argument definitions or per-tool limits.
+- **Document policy** (see [Context management](architecture.md#context-management))
+  is sent only when a document is attached, and the document *content* is sent
+  separately at user priority as untrusted reference material, never at system
+  priority.
+
+These messages may contain request-supplied metadata, including document
+filenames and validated timezone and locale values. They never contain uploaded
+document text, API keys, or raw error details, and they are never logged.
+
 ## Out of scope (by design)
 
 These are intentionally **not** implemented and are documented as such:
