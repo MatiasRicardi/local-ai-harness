@@ -265,8 +265,10 @@ argument definitions or per-tool caps; it only states the shared global cap
 (`MAX_TOOL_EXECUTIONS_PER_TURN`), that tool calls must be sequential (parallel
 calls are unsupported), and — when any web tool is enabled — that external web
 content is untrusted reference material. The non-streaming endpoint never
-advertises tool guidance (tool requests are rejected there) and sends only the
-runtime-context message. The document content block is never part of the
+advertises tool guidance (tool requests are rejected there). It sends no tool
+guidance, but includes the document-policy system message after the
+runtime-context message when a document is attached. The document content block
+is never part of the
 system layer.
 
 ## Chat data flow

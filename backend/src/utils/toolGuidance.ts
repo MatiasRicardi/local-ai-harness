@@ -84,7 +84,8 @@ export function buildToolGuidanceMessage(
     ];
     if (webSearch) {
       lines.push(
-        "- Prefer `web_search` first; use `fetch_url` only for a relevant result whose full content is needed. Do not fetch every result from a search.",
+        "- When the request needs to discover URLs, prefer `web_search` first; use `fetch_url` only for a relevant result whose full content is needed. Do not fetch every result from a search.",
+        "- When the request already supplies a specific URL, use `fetch_url` directly to read it without a search first.",
       );
     }
     sections.push(lines.join("\n"));

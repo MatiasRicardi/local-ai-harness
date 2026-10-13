@@ -151,8 +151,9 @@ message escapes the accounting:
   separately at user priority as untrusted reference material, never at system
   priority.
 
-These messages never contain user-authored content, uploaded document text, API
-keys, or raw error details, and they are never logged.
+These messages may contain request-supplied metadata, including document
+filenames and validated timezone and locale values. They never contain uploaded
+document text, API keys, or raw error details, and they are never logged.
 
 ## Out of scope (by design)
 
