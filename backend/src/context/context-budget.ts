@@ -1,5 +1,5 @@
 import { estimateTokens } from "./token-estimate.js";
-import { buildDocumentContextMessage, buildDocumentContentMessage } from "../utils/documentContext.js";
+import { buildDocumentContentMessage } from "../utils/documentContext.js";
 
 /**
  * Metadata about document truncation produced by budget calculation.
@@ -74,21 +74,21 @@ export function calculateInputBudgetTokens(usableContextTokens: number, response
 /**
  * Estimate the token count for the document context template overhead.
  *
- * This includes:
- * - The fixed text from `buildDocumentContextMessage()` (system policy)
- * - The filename
- * - The `<document>` wrapper prefix/suffix from `buildDocumentContentMessage()`
+ * This counts ONLY the fixed, user-priority `<document>` wrapper built by
+ * `buildDocumentContentMessage()` (with empty document text) plus the
+ * filename. It deliberately excludes the document *policy* message: that
+ * server-authored `system` message is now assembled by the central system
+ * message point and counted through the `systemInstructions` budget string,
+ * so the policy is accounted exactly once and never double-counted.
  *
  * Does NOT include the document body itself.
  */
 export function estimateDocumentTemplateOverhead(filename: string): number {
-  // Reuse the actual prompt builders with empty document text so the overhead
-  // matches exactly what buildAllMessages() sends.
+  // Reuse the actual prompt builder with empty document text so the overhead
+  // matches exactly what the user-priority document content message sends.
   const emptyDoc = { fileId: "", filename, text: "" };
-  const contextMessage = buildDocumentContextMessage(emptyDoc);
   const contentMessage = buildDocumentContentMessage(emptyDoc);
-  const totalText = contextMessage.content + contentMessage.content;
-  return estimateTokens(totalText);
+  return estimateTokens(contentMessage.content);
 }
 
 /**

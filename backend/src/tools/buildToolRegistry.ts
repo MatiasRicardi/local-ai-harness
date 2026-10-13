@@ -9,6 +9,7 @@ import { createCalculatorTool } from "./calculatorTool.js";
 import { createFetchUrlTool } from "./fetchUrlTool.js";
 import { createToolRegistry } from "./registry.js";
 import type { ToolRegistry } from "./types.js";
+import type { ToolCapabilities } from "../utils/toolGuidance.js";
 
 /**
  * Backend-authoritative defaults for the application/user-controlled web search
@@ -98,4 +99,29 @@ export function buildToolRegistry(
   // here means at least one tool was registered. Callers rely on this to choose
   // between the tool-aware orchestrator and the direct streaming path.
   return registry.listDefinitions().length > 0 ? registry : undefined;
+}
+
+/**
+ * Resolve the set of enabled tool capabilities from the tools that actually
+ * ended up registered for a request.
+ *
+ * This is the single source of truth for what the model is told it can do:
+ * the capability advertised in the system guidance is derived from the exact
+ * tool definitions sent to the provider, so the two can never disagree (an
+ * unregistered tool is never advertised as available, and vice versa).
+ *
+ * `undefined` registry means no tool is registered, so every capability is
+ * `false`. The helper is small, stateless and typed, and only inspects the
+ * tool names — it never re-derives registration from the request flags.
+ */
+export function resolveToolCapabilities(
+  registry: ToolRegistry | undefined,
+): ToolCapabilities {
+  const names = new Set(registry?.listDefinitions().map((definition) => definition.name));
+
+  return {
+    webSearch: names.has("web_search"),
+    calculator: names.has("calculator"),
+    fetchUrl: names.has("fetch_url"),
+  };
 }
