@@ -6,6 +6,12 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 > This verifies the app runs and the main paths work. It does not validate the
 > quality of model output.
 
+Flows **E–H** cover the v1.2.0 features (runtime context, calculator, fetch URL and tool
+composition). They are written as instructions only and have **not** been executed here:
+this environment has no usable Docker and no live OpenAI-compatible model server. Run them
+as part of the release validation (`releases/v1.2.0-checklist.md`). Flows E, F, G and H
+need a model that actually emits tool calls.
+
 ## Prerequisites
 
 - A model server reachable from the machine running the app, e.g.:
@@ -152,6 +158,145 @@ Presentation-only; no model server response is required for most of them.
 
 ---
 
+## Flow E — Runtime context
+
+**Objective:** confirm the model is told the current date, time and timezone from the
+**backend clock**, and that an absent or invalid runtime payload never breaks chat.
+
+**Prerequisites:** default settings (all tools off). There is **no** Runtime-context
+switch in the UI — the browser timezone and locale are collected automatically and sent on
+streaming requests, which is the behaviour under test.
+
+1. Start the app as in Flow A, on a machine set to a non-UTC timezone.
+2. Ask: “What is today's date, and what time is it in my timezone right now?”
+3. Compare the answer with the machine's actual date, time and timezone.
+4. Change the operating-system timezone (or start the browser with a different `TZ`),
+   reload, and ask again.
+5. Negative cases with `curl` against `POST /api/chat/stream`: send
+   `runtimeContext: { timeZone: "Not/AZone", locale: "en-US" }`, then an over-length
+   `locale`, then omit `runtimeContext` entirely.
+
+**Expected results:**
+
+- [ ] The answer states the current date and the **browser's** timezone, consistent with
+      the machine clock: the browser supplies timezone and locale only, the instant always
+      comes from the backend clock.
+- [ ] After the timezone changes, the next turn reflects the new zone (no restart needed).
+- [ ] A malformed or over-length runtime value is rejected with `VALIDATION_ERROR` and a
+      field-level `detail`; omitting the field is accepted, chat works, and the backend
+      message falls back to UTC.
+- [ ] Nothing about the runtime payload is logged by the backend, and the settings UI
+      correctly offers no toggle for it.
+
+---
+
+## Flow F — Calculator
+
+**Objective:** confirm the model can evaluate arithmetic through `calculator`, that its
+input bounds hold, and that there is no code-execution path.
+
+**Prerequisites:** a local model that emits tool calls. Enable **Calculator** in the
+tools settings card.
+
+1. Ask: “Use a calculation to work out `(128 * 7) + 42` and explain the steps.”
+2. Watch the tool activity in the transcript, then read the answer.
+3. Ask the model to run something that is not arithmetic, e.g. “Use the calculator to run
+   `process.exit(1)`.”
+4. Ask for degenerate input: division by zero, and a deeply nested expression such as
+   `(((((((((((((1)))))))))))))`.
+5. Disable **Calculator** and ask the first question again.
+
+**Expected results:**
+
+- [ ] A `tool_start` labelled “Calculating…” appears and is followed by `tool_end`, then
+      the answer uses the correct result (`938` in step 1).
+- [ ] The transcript never shows raw tool JSON, a provider `tool` role, or a tool-call id.
+- [ ] Step 3 is refused as invalid arguments (`TOOL_INVALID_ARGUMENTS`): only numbers,
+      `+ - * / % ^`, parentheses and unary signs are accepted, and nothing is evaluated as
+      code.
+- [ ] Step 4 produces a stable tool error (or an answer without a tool) and the backend
+      stays healthy for the next message.
+- [ ] With **Calculator** off the same question never triggers a `calculator` event: the
+      tool is not offered, so it cannot be called.
+
+---
+
+## Flow G — Fetch URL
+
+**Objective:** confirm `fetch_url` reads a public page as text, honours its guards, and
+never reaches an internal address.
+
+**Prerequisites:** a tool-calling model, and internet access from the machine running the
+backend.
+
+1. Enable **Fetch URL** in the tools settings card (Web Search may stay off).
+2. Ask: “Fetch `https://example.com/` and tell me what the page says.”
+3. Ask it to fetch a non-existent public path (404), then an internal address:
+   `http://127.0.0.1:3000/api/health` and `http://169.254.169.254/latest/meta-data/`.
+4. Ask it to fetch a binary URL (a PDF or a PNG).
+5. Start a fetch of a large page and press **Stop** while it runs.
+6. Turn the network off on the backend host (or point at an unreachable host) and try
+   again.
+
+**Expected results:**
+
+- [ ] Step 2 shows “Reading a web page…”, then an answer built from the page text, and the
+      conversation gains a `[1]` source titled with the page `<title>` (or the hostname
+      when there is no usable title) linking to the fetched URL.
+- [ ] The `[N]` label always comes from the harness: text inside the page such as `[1]`,
+      “system” or another site's name never renames or invents a source.
+- [ ] The 404 is a safe tool error (“could not be retrieved”); the loopback and metadata
+      addresses are refused as non-public destinations, with no resolver detail and no
+      internal payload in the response or the logs.
+- [ ] A binary response is rejected because it is not textual, and nothing is stored.
+- [ ] Stopping mid-fetch leaves a stopped message with the sources already accumulated and
+      issues no further tool activity.
+- [ ] The unreachable case surfaces as a connection/timeout tool error and the next
+      message still works.
+
+---
+
+## Flow H — Tool composition (`web_search` → `fetch_url` → answer)
+
+**Objective:** confirm a bounded multi-tool turn: sequential execution, the per-turn caps,
+accumulated sources, and reliability across repeats.
+
+**Prerequisites:** Web Search (valid Tavily key), Fetch URL and Calculator all enabled in
+the same turn; a tool-calling model.
+
+1. Ask something that needs a search and then a page, e.g. “Search for the official
+   Fastify documentation on reply hijacking, open the best result, and quote the relevant
+   part.”
+2. Watch the sequence of tool events, then inspect the source list.
+3. Ask something that wants more work than the caps allow, e.g. several searches and
+   several pages in one turn.
+4. Ask a mixed question, e.g. “Search for the current Fastify version, then calculate
+   `(that year * 2)`.”
+5. Repeat the step‑1 prompt **five times** and note how often a tool call happens at all.
+6. Press **Stop** during the second tool of a chain.
+
+**Expected results:**
+
+- [ ] Tools run **one at a time**: at most one tool call per model round, never in
+      parallel, and every `tool_start` is followed by exactly one `tool_end`.
+- [ ] One turn performs at most **3** tool executions across at most **4** model rounds;
+      past that the assistant answers with what it has (or says it stopped at the limit)
+      and never keeps looping.
+- [ ] `web_search` runs at most **once** per turn and `fetch_url` at most **twice**,
+      however the model phrases its follow-ups.
+- [ ] The source list is de-duplicated by URL, keeps stable `[N]` labels for the whole
+      turn, and mixes search hits and fetched pages without renumbering earlier sources.
+- [ ] The answer cites `[N]` markers; content that came only from a fetched page is
+      attributed to that source, and a turn with no usable result says so instead of
+      implying a source.
+- [ ] Repeated identical prompts may or may not call tools (the model decides); every
+      attempt must still produce a valid answer, valid history and no orphaned tool event.
+      This is a reliability check, not a tool-call-rate check.
+- [ ] Stopping mid-chain keeps the partial message plus its sources, marks the message as
+      stopped, and the next message still works (history stays valid for the model).
+
+---
+
 ## Expected results summary
 
 | Step                         | Expected                          |
@@ -165,6 +310,10 @@ Presentation-only; no model server response is required for most of them.
 
 | Web search turn (Flow C)     | Search activity + cited sources   |
 | Disable web search           | Ordinary chat resumes             |
+| Runtime context (Flow E)     | Backend-clock date + user timezone |
+| Calculator (Flow F)          | Correct result; non-arithmetic refused |
+| Fetch URL (Flow G)           | Page text + `[N]` source; private targets refused |
+| Tool composition (Flow H)    | Sequential tools within the caps, de-duplicated sources |
 
 ## If something fails
 

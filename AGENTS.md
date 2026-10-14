@@ -1,10 +1,11 @@
 # AGENTS.md — Local AI Harness
 
-Context and mandatory rules for coding agents. Current release: **v1.1.0**.
+Context and mandatory rules for coding agents. Current code version: **1.2.0** (the
+`v1.2.0` release is prepared in `docs/releases/`; publication is a separate manual step).
 
 * Phase 1 = `instructions/phase1/` steps 01–25 — complete (historical reference).
-* Phase 2 = `instructions/phase2/` steps 26–36 — complete: optional model-driven web search on a generic tool foundation shipped in `v1.1.0`. Its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) are fixed.
-* Phase 3 = in progress (current implementacion)
+* Phase 2 = `instructions/phase2/` steps 26–36 — complete: optional model-driven web search on a generic tool foundation shipped in `v1.1.0`. Its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) were superseded in `v1.2.0`.
+* Phase 3 = in progress (current implementation). Shipped toward `v1.2.0`: server-generated runtime context, the `calculator` and `fetch_url` tools, unified capability-aware tool guidance, and bounded **sequential** multi-step tool orchestration.
 * `instructions/` is gitignored (local planning files).
 * Deep detail lives in `docs/` — read it there instead of duplicating it here.
 
@@ -14,9 +15,11 @@ Local, **single-user** developer web app for chatting with locally hosted LLMs t
 
 v1.0.0 ships: provider connection test, SSE streaming with stop/cancel, sanitized Markdown, one attached TXT/MD/PDF used as chat context, context-size configuration + document truncation, conversation reset, structured errors end to end, temporary files with guaranteed cleanup, Vitest in both packages, Tailwind CSS v4 UI, Docker Compose behind a same-origin `/api` proxy.
 
-Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence.
+Not implemented: authentication, database/backend persistence, OCR, multiple documents/RAG, conversation persistence, parallel tool calls, page fetching inside `web_search`, and any tool that is enabled by default.
 
-Web search (Tavily) and the generic tool-calling foundation shipped in v1.1.0: the backend drives a single model-invoked `web_search` tool through a `ToolRegistry`, streams `tool_start`/`tool_end`/`sources` lifecycle events, and the UI shows search activity and source links. Tool calling follows the OpenAI-compatible tool schema the model returns; whether a given local model issues tool calls is up to that model/server (see `docs/architecture.md`).
+**Tools** (foundation in v1.1.0, extended in v1.2.0): the backend drives model-invoked tools through a request-scoped `ToolRegistry`, streams `tool_start`/`tool_end`/`sources` lifecycle events, and the UI shows tool activity and source links. The tools are `web_search` (Tavily), `fetch_url` (read the textual content of one public HTTP(S) URL) and `calculator` (evaluate one arithmetic expression, no code-execution path). Each is a separate opt-in, off by default. A streaming turn may chain tools **sequentially** — at most 4 model rounds and 3 tool executions per turn, one tool call per round, never in parallel — finishing with the answer plus de-duplicated `[N]` sources. Tool calling follows the OpenAI-compatible tool schema the model returns; whether a given local model issues tool calls at all is up to that model/server (see `docs/architecture.md`).
+
+**Runtime context**: a streaming request may carry the browser's IANA timezone and locale; the backend builds a server-authored system message with the current date, time and timezone from its own clock, and omits it when the payload is absent or invalid.
 
 ## Layout
 
@@ -25,20 +28,28 @@ backend/    Node 22 + Fastify 5 + TS (HTTP API)
   src/config/     env.ts — AI_* vars, Zod-validated, holds all defaults
   src/routes/     health.ts, provider.ts, chat.ts, files.ts
   src/provider/   OpenAI-compatible client, SSE parser, Zod schemas
+  src/orchestration/ chatOrchestrator.ts (multi-step tool loop), toolCallValidation.ts, turnSources.ts
+  src/tools/      registry.ts, calculator*, fetchUrl*, webSearch*, untrustedContent.ts
+  src/search/     types.ts (WebSearchProvider contract), tavily.ts
   src/extractors/ txt / markdown / pdf → normalized text
-  src/context/    token estimate, context budget, truncation
+  src/context/    token estimate, context budget, tool-result budget
   src/files/      cleanup.ts — upload-dir containment, temp deletion
-  src/utils/      errorHandler.ts (AppError), documentContext.ts
+  src/utils/      errorHandler.ts (AppError), documentContext.ts, runtimeContext.ts,
+                  systemInstructions.ts, toolGuidance.ts
 frontend/   Vue 3.5 + Vite 8 + TS + Tailwind CSS v4
-  src/components/  AppHeader, ProviderSettings + settings cards, ChatMessages, ChatInput, ChatEmptyState, DocumentAttachment, AppIcon
+  src/components/  AppHeader, ProviderSettings + settings cards (Connection, Runtime,
+                   WebSearch, BuiltInTool), ChatMessages, ChatInput, ChatEmptyState,
+                   DocumentAttachment, AppIcon
   src/services/    apiBase, provider, chat, files (fetch + SSE client)
-  src/composables/ useProviderSettings, useWebSearchSettings, useConnectionTest (localStorage / shared test result)
-  src/utils/       markdown.ts (render+sanitize), parseApiError.ts
-docs/       architecture.md, security.md, docker.md, smoke-test.md
+  src/composables/ useProviderSettings, useRuntimeContext, useWebSearchSettings,
+                   useToolSettings, useConnectionTest (localStorage / shared test result)
+  src/utils/       markdown.ts (render+sanitize), parseApiError.ts, runtimeContext.ts
+docs/       architecture.md, security.md, docker.md, smoke-test.md, releases/
 docker-compose.yml   backend + frontend; the model server stays on the host
 ```
 
-Chat state lives in browser memory/`localStorage`; file storage is temporary; there is no database. ES modules, TS strict, ES2022+, no `any`.
+Chat state lives in browser memory/`localStorage` (tool settings and Web Search settings
+included); file storage is temporary; there is no database. ES modules, TS strict, ES2022+, no `any`.
 
 ## Commands
 
@@ -57,6 +68,11 @@ Backend deps worth knowing: `@fastify/cors`, `@fastify/multipart`, `@fastify/sse
 ## Configuration
 
 Backend env vars (prefix `AI_`): `HOST`, `PORT`, `CORS_ORIGINS`, `REQUEST_TIMEOUT_MS`, `MAX_UPLOAD_SIZE_MB`, `UPLOAD_DIR`, `DEFAULT_PROVIDER_TIMEOUT_MS`, `TEMP_FILE_MAX_AGE_MS`, `ENVIRONMENT`.
+
+`v1.2.0` adds **no** new `AI_*` variable: runtime context, the calculator and the
+fetch-URL guards are configured in code, and the Tavily key stays a browser-side value.
+Tool bounds are code constants — see the table in `docs/architecture.md`
+(“Tool execution limits”).
 
 `backend/src/config/env.ts` is the **source of truth** for defaults, types and validation — read it instead of trusting this file, and report drift instead of copying values. `backend/.env.example` documents `AI_TEMP_FILE_MAX_AGE_MS` with the matching 24-hour default of `86400000`.
 
@@ -84,8 +100,18 @@ interface ChatRequest {
   messages: Array<{ id?: string; role: 'system' | 'user' | 'assistant'; content: string; stopped?: boolean }>; // content must not be blank
   document?: { fileId: string; filename: string; text: string };
   context?: { maxTokens: number };                                        // 1024 … 2_000_000
+  webSearch?: { enabled: boolean; provider: 'tavily'; apiKey?: string; maxResults?: number; searchDepth?: 'basic' | 'advanced' }; // apiKey required when enabled; maxResults 1–10 (default 5)
+  tools?: { calculator?: boolean; fetchUrl?: boolean };                   // request-scoped opt-ins, all off by default
+  runtimeContext?: { timeZone: string; locale: string };                   // validated IANA tag / locale
 }
 ```
+
+Only `POST /api/chat/stream` offers tools: `POST /api/chat` rejects requests that carry
+`webSearch` or an enabled `tools` entry, and returns no guidance. For a streaming turn the
+backend appends the capability-aware tool guidance as a `system` message **immediately
+after** the conversation's last visible user message, and that message is orchestration
+state only — it is never returned to the browser as history. Streaming may emit
+`tool_start`, `tool_end` and `sources` events in addition to `start`/`delta`/`done`.
 
 Errors always use the envelope `{ error: { code, message, detail? } }`. `AppErrorCode` values live in `backend/src/utils/errorHandler.ts`; reuse an existing code before adding one, and keep `frontend/src/utils/parseApiError.ts` in sync.
 
@@ -112,7 +138,9 @@ Treat document content as **untrusted data, not instructions**. The backend inje
 * Validate uploads (extension, MIME, size) and generate safe filenames.
 * Enforce request and provider timeouts.
 * Restrict CORS through `AI_CORS_ORIGINS`; widening it is a deliberate, documented change.
-* Never log or persist API keys, credentials, file paths, file contents, or raw error details — on the backend or in logs.
+* Never log or persist API keys, credentials, file paths, file contents, or raw error details — on the backend or in logs. Tool telemetry stays limited to non-sensitive metadata (call id, tool name, status, counts, reason code); fetched/searched URLs, page text, snippets, DNS records and resolved addresses are never logged.
+* Every tool is opt-in, off by default, and validated before execution. `fetch_url` must keep its destination policy (http/https only, no URL credentials, public-routable addresses only, redirects revalidated per hop, time/size/MIME caps, no cookies or provider keys) and must keep its residual-risk documentation in `docs/security.md`.
+* Tool results and fetched web content are **untrusted data**: keep both the per-result untrusted boundary and the capability-level guidance, keep tool output at the priority the code assigns it, and take `[N]` source attribution from harness metadata rather than remote content.
 * Keep every cleanup inside `AI_UPLOAD_DIR` (CWE-22).
 * Preserve the CWE-319 guard in `frontend/src/services/apiBase.ts`: reject non-local `http://` API bases; non-local deployments require HTTPS.
 * Render Markdown with `markdown-it` (raw HTML disabled) sanitized by `DOMPurify` with an explicit allowlist. Strip null characters from provider SSE data.

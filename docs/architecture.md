@@ -14,6 +14,8 @@ application that talks to any **OpenAI-compatible** model server.
 - [Frontend](#frontend)
 - [API contract](#api-contract)
 - [Chat data flow](#chat-data-flow)
+- [Built-in tools](#built-in-tools)
+- [Tool execution limits](#tool-execution-limits)
 - [Configuration](#configuration)
 - [File handling](#file-handling)
 - [Context management](#context-management)
@@ -31,19 +33,27 @@ local-ai-harness/
 │   │   ├── app.ts               # buildApp(): plugins + route registration
 │   │   ├── routes/              # health, provider, chat, files
 │   │   ├── provider/            # OpenAI-compatible client, SSE parser, schemas
+│   │   ├── orchestration/       # chatOrchestrator, toolCallValidation, turnSources
+│   │   ├── tools/               # registry + calculator / fetch_url / web_search
+│   │   ├── search/              # WebSearchProvider contract + Tavily provider
 │   │   ├── extractors/          # txt, markdown, pdf, text-utils
 │   │   ├── files/cleanup.ts     # temporary-file lifecycle + path safety
-│   │   ├── context/             # context-budget + token-estimate
-│   │   └── utils/               # errorHandler, documentContext
+│   │   ├── context/             # context-budget, token-estimate, toolResultBudget
+│   │   └── utils/               # errorHandler, documentContext, runtimeContext,
+│   │                            # systemInstructions, toolGuidance
 │   ├── Dockerfile
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── components/          # AppHeader, settings cards, ChatMessages, ChatInput,
-│   │   │                        # ChatEmptyState, DocumentAttachment, AppIcon
-│   │   ├── composables/         # useProviderSettings, useWebSearchSettings, useConnectionTest
+│   │   ├── components/          # AppHeader, ProviderSettings + settings cards
+│   │   │                        # (Connection, Runtime, WebSearch, BuiltInTool),
+│   │   │                        # ChatMessages, ChatInput, ChatEmptyState,
+│   │   │                        # DocumentAttachment, AppIcon
+│   │   ├── composables/         # useProviderSettings, useWebSearchSettings,
+│   │   │                        # useToolSettings, useConnectionTest
 │   │   ├── services/            # apiBase, chat, files, provider
-│   │   ├── utils/               # markdown (markdown-it + DOMPurify), parseApiError
+│   │   ├── utils/               # markdown (markdown-it + DOMPurify), parseApiError,
+│   │   │                        # runtimeContext (browser timezone/locale collection)
 │   │   ├── types/               # error types
 │   │   ├── App.vue              # root component
 │   │   └── main.ts              # entry point
@@ -121,6 +131,41 @@ browser cannot resolve. **By default** browser↔backend traffic uses a relative
 
 Supported input: `.txt`, `.md` (UTF-8 text) and `.pdf` (text extraction only;
 no OCR).
+
+**Built-in tools** (`tools/`): a request-scoped `ToolRegistry` plus the tool
+implementations. See [Built-in tools](#built-in-tools) for the layering, and
+[Tool execution limits](#tool-execution-limits) for every bound.
+
+- `registry.ts` / `types.ts` — registration, duplicate-name rejection, the
+  harness-internal `executionPolicy.maxExecutionsPerTurn`, and the OpenAI-shaped
+  tool definitions (`openAiToolDefinition.ts`).
+- `calculatorExpression.ts` / `calculatorTool.ts` — explicit expression engine and
+  its tool wrapper.
+- `fetchUrlPolicy.ts` / `fetchUrlClient.ts` / `fetchUrlContent.ts` / `fetchUrlTool.ts`
+  — destination policy, transport, extraction, tool wrapper.
+- `webSearchTool.ts` / `webSearchFormat.ts` — the `web_search` tool over the search
+  provider and its untrusted-result formatting.
+- `untrustedContent.ts` / `sourceSanitization.ts` — shared untrusted-content
+  boundaries and source sanitization.
+
+**Search providers** (`search/`): `types.ts` keeps the provider-agnostic
+`WebSearchProvider` contract and the request bounds; `tavily.ts` is the only
+implementation in this release.
+
+**Orchestration** (`orchestration/`):
+
+- `chatOrchestrator.ts` — the bounded sequential tool loop (model round → tool
+  execution → follow-up round → final answer), tool-result context budgeting and
+  SSE-facing event emission.
+- `toolCallValidation.ts` — validates model-supplied tool calls against the
+  registry and the per-turn caps.
+- `turnSources.ts` — `TurnSourceAccumulator`, the turn-local id allocator keyed by
+  normalized URL.
+
+**Context budgeting** (`context/`): `context-budget.ts` (conversation + document
+budget, see [Context management](#context-management)), `token-estimate.ts`, and
+`toolResultBudget.ts`, which budgets each tool result against the same cumulative
+input budget (see [Tool execution limits](#tool-execution-limits)).
 
 ## Frontend
 
@@ -234,6 +279,30 @@ interface Message {
 }
 ```
 
+**Optional chat request fields** (all additive, validated in
+`provider/schemas.ts`; a malformed value fails the whole request with
+`VALIDATION_ERROR` and a field-level `detail`):
+
+```ts
+interface ChatRequestExtras {
+  runtimeContext?: { timeZone: string; locale: string }   // IANA tag ≤ 100 / locale ≤ 40
+  webSearch?: {                                          // streaming only
+    enabled: boolean
+    provider: 'tavily'
+    apiKey?: string                                      // required when enabled; never logged
+    maxResults?: number                                  // 1–10 (backend default 5)
+    searchDepth?: 'basic' | 'advanced'                   // backend default 'basic'
+  }
+  tools?: {                                              // streaming only
+    calculator?: boolean                                 // true enables 'calculator'
+    fetchUrl?: boolean                                   // true enables 'fetch_url'
+  }
+}
+```
+
+Omitted or `false` keeps a tool unavailable to the model; the non-streaming
+endpoint rejects `webSearch` and any enabled `tools` entry.
+
 **Runtime context:** every chat request may carry an optional `runtimeContext`
 (`{ timeZone, locale }`) sent by the frontend. The backend treats it as
 presentation metadata only: it generates the authoritative current instant from
@@ -264,12 +333,9 @@ message escapes the accounting. The document *content* block is deliberately
 argument definitions or per-tool caps; it only states the shared global cap
 (`MAX_TOOL_EXECUTIONS_PER_TURN`), that tool calls must be sequential (parallel
 calls are unsupported), and — when any web tool is enabled — that external web
-content is untrusted reference material. The non-streaming endpoint never
-advertises tool guidance (tool requests are rejected there). It sends no tool
-guidance, but includes the document-policy system message after the
-runtime-context message when a document is attached. The document content block
-is never part of the
-system layer.
+content is untrusted reference material. The non-streaming endpoint sends only the
+runtime-context message plus the document-policy message (when a document is attached): it
+never advertises tool guidance, because it rejects tool requests.
 
 ## Chat data flow
 
@@ -393,6 +459,148 @@ The buffering is intentional, not a regression: it avoids leaking preliminary,
 soon-discarded text. Reworking the orchestration to stream the first round live
 while still suppressing filler is a planned follow-up, not a v1.1.0 change.
 
+## Built-in tools
+
+Tools are registered **per request**: `buildToolRegistry()` reads the request's
+`webSearch` and `tools` flags and returns a registry, or `undefined` when nothing is
+enabled. The registry is the single source of truth — the tool definitions sent to the
+provider, the capability-aware guidance message (`resolveToolCapabilities` /
+`buildToolGuidanceMessage`) and the execution rights all derive from the same object, so
+a tool is never advertised unless it is also offered. Tools are only available on
+`POST /api/chat/stream`; the non-streaming endpoint rejects tool requests and advertises
+no guidance.
+
+### Registry and policies
+
+- `ToolRegistry.register()` rejects duplicate names and validates the internal
+  `executionPolicy.maxExecutionsPerTurn` up front. That policy is harness-only: it is
+  never serialized into the provider-facing definition and is neither model- nor
+  user-controllable.
+- Definitions use the OpenAI-compatible function shape (`type: "function"`,
+  `function.name`, `function.arguments`) and carry their own argument descriptions, which
+  is why the system guidance never repeats a schema.
+- Model-supplied arguments are parsed with strict Zod schemas (`.strict()`): an
+  unexpected key is rejected before execution, so a malformed call never reaches a tool
+  implementation.
+- `untrustedContent.ts` holds the shared "reference data, not instructions" text that
+  every web-content tool result embeds, in addition to the capability-level guidance.
+
+### Calculator (`calculator`)
+
+`calculatorExpression.ts` is a deterministic, dependency-free engine: a hand-written
+lexer plus a recursive-descent parser over numbers, `+ - * / % ^`, parentheses and unary
+signs.
+
+- There is **no code-execution path**: no `eval`, no `new Function`, no `vm`, no
+  `child_process`, no dynamic `import`.
+- Input is bounded before parsing (length, token count, recursion depth) — see
+  [Tool execution limits](#tool-execution-limits).
+- Arithmetic is IEEE-754 JavaScript `number`, **not** arbitrary precision: very large or
+  very small magnitudes can be inexact. Division by zero and non-finite results are
+  reported as tool errors instead of a guessed value.
+
+### Fetch URL (`fetch_url`)
+
+Reading a page is split into three layers so each guard is independently testable:
+
+1. **Destination policy** (`fetchUrlPolicy.ts`) — WHATWG URL parsing, an `http:`/`https:`
+   protocol allowlist, rejection of URL credentials, hostname normalization, then DNS
+   resolution where **every** resolved address must be public routable space (loopback,
+   private, link-local including cloud metadata addresses, unique-local, reserved and
+   unspecified ranges are refused, IPv4 and IPv6 alike). Rejections carry a stable, safe
+   reason: raw DNS diagnostics and the resolved addresses are never surfaced to the model
+   or the API.
+2. **Transport** (`fetchUrlClient.ts`) — one deadline for the whole operation, manual
+   redirect following with the destination policy re-run on **every** hop, a redirect
+   cap, a textual-MIME allowlist that fails closed on a missing or unknown
+   `Content-Type`, and a streamed byte counter that aborts as soon as the real body
+   exceeds the cap (`Content-Length` is treated as a hint, never as authority). Request
+   headers are fixed and harness-controlled: no cookies, no provider keys, no
+   model-supplied headers, and `redirect: "manual"` precisely so each hop can be
+   validated before it is followed.
+3. **Extraction** (`fetchUrlContent.ts`) — HTML/XML/JSON are deterministically reduced to
+   text (markup, scripts and comments stripped, entities and CDATA handled), then bounded
+   by an extracted-character cap with an explicit truncation marker.
+
+Fetched text reaches the model inside a harness-authored untrusted boundary, and the
+`[N]` source label comes from the turn accumulator, never from the page. There is **no
+JavaScript execution and no browser rendering**: a page that needs a browser to become
+useful is out of scope, as are binary payloads (PDFs, images, archives).
+
+### Web search (`web_search`)
+
+Model-driven Tavily search (see
+[Tool-call compatibility](#tool-call-compatibility)). `search/types.ts` keeps the
+provider contract provider-agnostic and `webSearchFormat.ts` renders each result as an
+untrusted `[N]` block. It composes with `fetch_url`: search returns snippets, and the
+model reads a page only when it decides the full text of a specific result is needed.
+
+## Tool execution limits
+
+Every bound below is a **code constant**, not an environment variable: v1.2.0 adds no
+`AI_*` knob for tool behaviour, and changing a limit means changing code (constants live
+in `orchestration/chatOrchestrator.ts`, `tools/calculatorExpression.ts`,
+`tools/fetchUrlClient.ts`, `tools/fetchUrlContent.ts`, `search/types.ts`, and the
+per-tool `executionPolicy` of each tool definition.
+
+### Orchestration
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Maximum model rounds | 4 | `MAX_MODEL_ROUNDS` |
+| Maximum tool executions per turn | 3 | `MAX_TOOL_EXECUTIONS_PER_TURN` |
+| `web_search` executions per turn | 1 | `executionPolicy.maxExecutionsPerTurn` |
+| `fetch_url` executions per turn | 2 | `executionPolicy.maxExecutionsPerTurn` |
+| `calculator` executions per turn | 3 | `executionPolicy.maxExecutionsPerTurn` |
+| Parallel tool calls | Not supported | one tool call accepted per model round |
+
+### Calculator
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Maximum expression length | 500 characters | `MAX_EXPRESSION_LENGTH` |
+| Maximum tokens | 256 | `MAX_TOKENS` |
+| Maximum parse depth | 64 | `MAX_PARSE_DEPTH` |
+
+### Fetch URL
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Total timeout | 15 seconds | `FETCH_URL_TIMEOUT_MS` (initial request + every redirect + body read, one shared deadline) |
+| Maximum redirects | 5 | `MAX_REDIRECTS` |
+| Maximum downloaded response | 1 MiB | `MAX_RESPONSE_BYTES` (bytes read off the network) |
+| Maximum extracted text | 200,000 characters | `MAX_EXTRACTED_CONTENT_CHARACTERS` |
+| Maximum title | 300 characters | `MAX_TITLE_CHARACTERS` |
+
+Web search bounds for comparison: the query is capped at 500 characters
+(`WEB_SEARCH_MAX_QUERY`), `maxResults` is validated in 1–10 and defaults to 5, and the
+Tavily call has its own 10-second timeout (`TAVILY_DEFAULT_TIMEOUT_MS`).
+
+### Three separate caps on one fetched page
+
+These apply in sequence and must not be confused:
+
+| Stage | Bound | Meaning |
+|-------|-------|---------|
+| Download | 1 MiB | bytes the backend is willing to read from the network |
+| Extraction | 200,000 characters | text kept after reducing HTML/XML/JSON to text |
+| Model context | `context/toolResultBudget.ts` | what actually survives into the request, recomputed against the configured `context.maxTokens` every time a result is accumulated |
+
+A page can therefore be downloaded in full, extracted in full, and still be shortened
+(or omitted) before it reaches the model: tool results share one cumulative input budget
+with the rest of the turn instead of each getting an independent allowance. When a
+result cannot be included at all, the model receives the short
+`TOOL_RESULT_CONTEXT_OMISSION_TEXT` notice rather than a silently empty message.
+
+### What happens at a limit
+
+Limits degrade through the existing error path, never as a crash: a call whose arguments
+fail validation is never executed and emits no lifecycle events; a tool that already
+reached its own per-turn cap is answered with a synthetic `role: "tool"` result (keeping
+the OpenAI-compatible history valid) instead of running again; a tool call arriving after
+the global cap forces the final no-tools round or the stable error path; and a network,
+timeout, redirect or size failure surfaces as a tool-level error with a stable code.
+
 ## Configuration
 
 Configuration is validated at startup with Zod (`config/env.ts`). Missing values
@@ -410,6 +618,11 @@ fall back to code defaults; `.env.example` documents the recommended values.
 | `AI_TAVILY_BASE_URL`             | `https://api.tavily.com`     | Tavily web-search API base URL.           |
 | `AI_TEMP_FILE_MAX_AGE_MS`        | `86400000` (24h)             | Stale temporary-file cleanup threshold.   |
 | `AI_ENVIRONMENT`                 | `development`                | `development` \| `production` \| `test`   |
+
+v1.2.0 adds **no** new environment variable: runtime context, the calculator and the
+fetch-URL guards are all configured in code, and the Tavily key stays a browser-side
+value (never `.env`). See [Tool execution limits](#tool-execution-limits) for the
+in-code bounds.
 
 Note: `.env.example` sets `AI_REQUEST_TIMEOUT_MS` to the same value as the
 code default (`60000`), so a copied `.env` uses the code default.
