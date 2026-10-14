@@ -2533,6 +2533,19 @@ function roundToolNames(calls: RecordedCall[], index: number): string[] {
   return tools ? tools.map((tool) => tool.name) : [];
 }
 
+/**
+ * The tool lifecycle as a single ordered sequence of `start:<name>` /
+ * `end:<name>` entries. Filtering starts and ends separately would also accept
+ * an out-of-order lifecycle such as `start(a), start(b), end(a), end(b)`; one
+ * sequence pins each `tool_start` to be immediately followed by its own
+ * `tool_end`, which is the lifecycle order these chains claim to check.
+ */
+function toolLifecycle(events: ChainEvent[]): string[] {
+  return events
+    .filter((event) => event.type === "tool_start" || event.type === "tool_end")
+    .map((event) => `${event.type === "tool_start" ? "start" : "end"}:${event.name}`);
+}
+
 describe("ChatOrchestrator — integration chain E: web_search -> fetch_url -> final", () => {
   const toolCallRound = (id: string, name: string, args = "{}") => [
     {
@@ -2577,14 +2590,13 @@ describe("ChatOrchestrator — integration chain E: web_search -> fetch_url -> f
       }),
     )) as ChainEvent[];
 
-    // Lifecycle events ordered: the whole web_search pair before the fetch pair.
-    expect(events.filter((e) => e.type === "tool_start").map((e) => e.name)).toEqual([
-      "web_search",
-      "fetch_url",
-    ]);
-    expect(events.filter((e) => e.type === "tool_end").map((e) => e.name)).toEqual([
-      "web_search",
-      "fetch_url",
+    // Lifecycle pairs in one ordered sequence: each start is immediately
+    // followed by its own end, and the whole web_search pair precedes fetch_url.
+    expect(toolLifecycle(events)).toEqual([
+      "start:web_search",
+      "end:web_search",
+      "start:fetch_url",
+      "end:fetch_url",
     ]);
 
     // Each tool executed exactly once.
@@ -2652,13 +2664,11 @@ describe("ChatOrchestrator — integration chain F: fetch_url -> calculator -> f
       }),
     )) as ChainEvent[];
 
-    expect(events.filter((e) => e.type === "tool_start").map((e) => e.name)).toEqual([
-      "fetch_url",
-      "calculator",
-    ]);
-    expect(events.filter((e) => e.type === "tool_end").map((e) => e.name)).toEqual([
-      "fetch_url",
-      "calculator",
+    expect(toolLifecycle(events)).toEqual([
+      "start:fetch_url",
+      "end:fetch_url",
+      "start:calculator",
+      "end:calculator",
     ]);
     expect(fetch.execute).toHaveBeenCalledTimes(1);
     expect(calc.execute).toHaveBeenCalledTimes(1);
@@ -2718,16 +2728,15 @@ describe("ChatOrchestrator — integration chain G: web_search -> fetch_url -> c
       }),
     )) as ChainEvent[];
 
-    // Exactly three tool executions, in the documented order.
-    expect(events.filter((e) => e.type === "tool_start").map((e) => e.name)).toEqual([
-      "web_search",
-      "fetch_url",
-      "calculator",
-    ]);
-    expect(events.filter((e) => e.type === "tool_end").map((e) => e.name)).toEqual([
-      "web_search",
-      "fetch_url",
-      "calculator",
+    // Exactly three tool executions, each start immediately followed by its own
+    // end, in the documented order.
+    expect(toolLifecycle(events)).toEqual([
+      "start:web_search",
+      "end:web_search",
+      "start:fetch_url",
+      "end:fetch_url",
+      "start:calculator",
+      "end:calculator",
     ]);
     expect(search.execute).toHaveBeenCalledTimes(1);
     expect(fetch.execute).toHaveBeenCalledTimes(1);

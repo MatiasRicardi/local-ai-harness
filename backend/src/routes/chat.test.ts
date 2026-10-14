@@ -1447,11 +1447,13 @@ describe("chat/stream endpoint", () => {
   it("wires all three built-in tools end to end: request -> registry -> guidance -> provider tools -> orchestrator -> SSE", async () => {
     app = buildApp();
 
-    // Capture the provider request body and return sequential SSE rounds. Only
+    // Capture every provider request body and return sequential SSE rounds. Only
     // `calculator` is invoked by the model in this test, so no tool makes a
     // network call: web_search (Tavily) and fetch_url (HTTP) are never executed,
     // keeping the test hermetic while still proving all three tools are wired.
-    let capturedBody: Record<string, unknown> | undefined;
+    // All rounds are kept (not just the last one) so the first-round wiring can
+    // be asserted against the request that actually started the tool loop.
+    const capturedBodies: Array<Record<string, unknown>> = [];
     let providerCall = 0;
     const encoder = new TextEncoder();
     const streamFrom = (events: Array<string | Record<string, unknown>>) => ({
@@ -1471,7 +1473,7 @@ describe("chat/stream endpoint", () => {
     });
 
     global.fetch = ((_url: string, options: RequestInit) => {
-      capturedBody = JSON.parse(options.body as string);
+      capturedBodies.push(JSON.parse(options.body as string));
       providerCall += 1;
       if (providerCall === 1) {
         return streamFrom([
@@ -1523,10 +1525,17 @@ describe("chat/stream endpoint", () => {
     expect(body).toContain('event: done');
     expect(body).not.toContain('event: error');
 
+    // Exactly two provider rounds: the calculator tool round, then the final
+    // answer. A third round would mean the loop did something unexpected.
+    expect(providerCall).toBe(2);
+    expect(capturedBodies).toHaveLength(2);
+
     // Request -> registry -> provider tool definitions: all three enabled tools
-    // are offered to the provider in the first round.
-    expect(capturedBody).toBeDefined();
-    const toolNames = ((capturedBody?.tools as Array<{ function: { name: string } }> ?? []).map(
+    // are offered to the provider in the first round (asserted against the first
+    // captured request, not the one the loop ended with).
+    const firstRequest = capturedBodies[0] as Record<string, unknown> | undefined;
+    expect(firstRequest).toBeDefined();
+    const toolNames = ((firstRequest?.tools as Array<{ function: { name: string } }> ?? []).map(
       (tool) => tool.function.name,
     ) as string[]);
     expect(toolNames).toEqual(expect.arrayContaining(["web_search", "fetch_url", "calculator"]));
@@ -1535,7 +1544,7 @@ describe("chat/stream endpoint", () => {
     // system messages carries guidance for each of the three enabled tools
     // (the runtime-context message is assembled first, so scan all system
     // messages rather than assuming an index).
-    const systemText = (capturedBody?.messages as Array<Record<string, unknown>> ?? [])
+    const systemText = (firstRequest?.messages as Array<Record<string, unknown>> ?? [])
       .filter((message) => message.role === "system")
       .map((message) => String(message.content ?? ""))
       .join("\n");
