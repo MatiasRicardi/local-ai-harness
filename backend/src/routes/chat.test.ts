@@ -1444,6 +1444,115 @@ describe("chat/stream endpoint", () => {
     expect(body).toContain('event: done');
   });
 
+  it("wires all three built-in tools end to end: request -> registry -> guidance -> provider tools -> orchestrator -> SSE", async () => {
+    app = buildApp();
+
+    // Capture every provider request body and return sequential SSE rounds. Only
+    // `calculator` is invoked by the model in this test, so no tool makes a
+    // network call: web_search (Tavily) and fetch_url (HTTP) are never executed,
+    // keeping the test hermetic while still proving all three tools are wired.
+    // All rounds are kept (not just the last one) so the first-round wiring can
+    // be asserted against the request that actually started the tool loop.
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    let providerCall = 0;
+    const encoder = new TextEncoder();
+    const streamFrom = (events: Array<string | Record<string, unknown>>) => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const line of events) {
+            const serialized = typeof line === "string" ? line : JSON.stringify(line);
+            controller.enqueue(encoder.encode(`data: ${serialized}\n\n`));
+          }
+          controller.close();
+        },
+      }),
+      headers: new Headers({ "content-type": "text/event-stream" }),
+    });
+
+    global.fetch = ((_url: string, options: RequestInit) => {
+      capturedBodies.push(JSON.parse(options.body as string));
+      providerCall += 1;
+      if (providerCall === 1) {
+        return streamFrom([
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_r1",
+                      type: "function",
+                      function: { name: "calculator", arguments: '{"expression":"21*2"}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+          "[DONE]",
+        ]);
+      }
+      return streamFrom([
+        { choices: [{ delta: { content: "final" } }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]);
+    }) as unknown as typeof globalThis.fetch;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat/stream",
+      payload: {
+        provider: { baseUrl: "http://127.0.0.1:8080/v1", model: "test-model" },
+        messages: [{ role: "user", content: "calculate 21 times 2 and tell me" }],
+        webSearch: { enabled: true, provider: "tavily", apiKey: "test-key" },
+        tools: { calculator: true, fetchUrl: true },
+      },
+    });
+
+    // Orchestrator -> SSE: the calculator lifecycle wraps the final streamed
+    // answer, and no contradictory error event is emitted.
+    const body = response.body;
+    expect(body).toContain('event: tool_start');
+    expect(body).toContain('"name":"calculator"');
+    expect(body).toContain('event: tool_end');
+    expect(body).toContain('"text":"final"');
+    expect(body).toContain('event: done');
+    expect(body).not.toContain('event: error');
+
+    // Exactly two provider rounds: the calculator tool round, then the final
+    // answer. A third round would mean the loop did something unexpected.
+    expect(providerCall).toBe(2);
+    expect(capturedBodies).toHaveLength(2);
+
+    // Request -> registry -> provider tool definitions: all three enabled tools
+    // are offered to the provider in the first round (asserted against the first
+    // captured request, not the one the loop ended with).
+    const firstRequest = capturedBodies[0] as Record<string, unknown> | undefined;
+    expect(firstRequest).toBeDefined();
+    const toolNames = ((firstRequest?.tools as Array<{ function: { name: string } }> ?? []).map(
+      (tool) => tool.function.name,
+    ) as string[]);
+    expect(toolNames).toEqual(expect.arrayContaining(["web_search", "fetch_url", "calculator"]));
+
+    // Request -> registry -> capability guidance: one of the server-authored
+    // system messages carries guidance for each of the three enabled tools
+    // (the runtime-context message is assembled first, so scan all system
+    // messages rather than assuming an index).
+    const systemText = (firstRequest?.messages as Array<Record<string, unknown>> ?? [])
+      .filter((message) => message.role === "system")
+      .map((message) => String(message.content ?? ""))
+      .join("\n");
+    expect(systemText).toContain("calculator");
+    expect(systemText).toContain("web_search");
+    expect(systemText).toContain("fetch_url");
+  });
+
   it("sends error event when stream ends without [DONE]", async () => {
     app = buildApp();
 

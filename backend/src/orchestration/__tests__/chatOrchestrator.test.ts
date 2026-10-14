@@ -2471,3 +2471,305 @@ describe("ChatOrchestrator — cumulative turn-local sources (Step 50)", () => {
     );
   });
 });
+
+// ── Multi-tool integration chains (Step 53) ────────────────────────────────────
+//
+// Steps 37-52 cover each tool in isolation and repeat the *same* generic tool
+// name across a chain. These scenarios register the three real tool names
+// (`web_search`, `fetch_url`, `calculator`) together in one turn to prove they
+// coexist, are selected and executed in order, keep their tool_call_id pairing,
+// and that the orchestrator bounds the whole sequence. The tools are fakes
+// (no network, no Tavily, no real model) but they carry their real names so the
+// registry, guidance and tool-definition wiring are exercised for the actual
+// built-in tool set.
+
+type ChainEvent = { type: string; name?: string; text?: string; sources?: unknown[] };
+
+interface RecordedToolCall {
+  id: string;
+}
+
+interface RecordedAssistantMessage {
+  role: string;
+  tool_calls?: RecordedToolCall[];
+}
+
+interface RecordedToolMessage {
+  role: string;
+  tool_call_id?: string;
+}
+
+/** Ordered tool-call ids the assistant emitted across every recorded round. */
+function assistantToolCallIds(messages: unknown): string[] {
+  const ids: string[] = [];
+  for (const message of messages as unknown[] as RecordedAssistantMessage[]) {
+    if (message.role === "assistant") {
+      for (const call of message.tool_calls ?? []) ids.push(call.id);
+    }
+  }
+  return ids;
+}
+
+/** Ordered tool_call_id values of every tool result across every recorded round. */
+function toolResultIds(messages: unknown): string[] {
+  const ids: string[] = [];
+  for (const message of messages as unknown[] as RecordedToolMessage[]) {
+    if (message.role === "tool") ids.push(message.tool_call_id as string);
+  }
+  return ids;
+}
+
+interface RecordedToolDefinition {
+  name: string;
+}
+
+interface RecordedToolOptions {
+  tools?: RecordedToolDefinition[];
+}
+
+/** The `options.tools` definitions sent with a recorded provider round. */
+function roundToolNames(calls: RecordedCall[], index: number): string[] {
+  const tools = (calls[index].options as RecordedToolOptions | undefined)?.tools;
+  return tools ? tools.map((tool) => tool.name) : [];
+}
+
+/**
+ * The tool lifecycle as a single ordered sequence of `start:<name>` /
+ * `end:<name>` entries. Filtering starts and ends separately would also accept
+ * an out-of-order lifecycle such as `start(a), start(b), end(a), end(b)`; one
+ * sequence pins each `tool_start` to be immediately followed by its own
+ * `tool_end`, which is the lifecycle order these chains claim to check.
+ */
+function toolLifecycle(events: ChainEvent[]): string[] {
+  return events
+    .filter((event) => event.type === "tool_start" || event.type === "tool_end")
+    .map((event) => `${event.type === "tool_start" ? "start" : "end"}:${event.name}`);
+}
+
+describe("ChatOrchestrator — integration chain E: web_search -> fetch_url -> final", () => {
+  const toolCallRound = (id: string, name: string, args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text: string) => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  it("executes web_search then fetch_url in order, each once, then a single final answer", async () => {
+    const registry = createRegistry();
+    const search = createTool("web_search", "search result");
+    const fetch = createTool("fetch_url", "page content");
+    registry.register(search);
+    registry.register(fetch);
+
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_e1", "web_search"),
+      ...toolCallRound("call_e2", "fetch_url", '{"url":"https://example.com/page"}'),
+      ...plainAnswer("final"),
+    ]);
+
+    const events = (await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    )) as ChainEvent[];
+
+    // Lifecycle pairs in one ordered sequence: each start is immediately
+    // followed by its own end, and the whole web_search pair precedes fetch_url.
+    expect(toolLifecycle(events)).toEqual([
+      "start:web_search",
+      "end:web_search",
+      "start:fetch_url",
+      "end:fetch_url",
+    ]);
+
+    // Each tool executed exactly once.
+    expect(search.execute).toHaveBeenCalledTimes(1);
+    expect(fetch.execute).toHaveBeenCalledTimes(1);
+
+    // Final answer emitted once and exactly one terminal `done`.
+    expect(events.filter((e) => e.type === "delta")).toEqual([{ type: "delta", text: "final" }]);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+
+    // `calls[n]` is the conversation state before round n is sent, so the final
+    // answer round already carries both prior tool calls and results.
+    expect(assistantToolCallIds(calls[2].messages)).toEqual(["call_e1", "call_e2"]);
+    expect(toolResultIds(calls[2].messages)).toEqual(["call_e1", "call_e2"]);
+
+    // Both tool rounds carried tool definitions (only two tools executed, so no
+    // forced no-tools round is reached).
+    expect(roundToolNames(calls, 0)).toEqual(["web_search", "fetch_url"]);
+    expect(roundToolNames(calls, 1)).toEqual(["web_search", "fetch_url"]);
+    expect(calls).toHaveLength(3);
+  });
+});
+
+describe("ChatOrchestrator — integration chain F: fetch_url -> calculator -> final", () => {
+  const toolCallRound = (id: string, name: string, args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text: string) => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  it("executes fetch_url then calculator in order, each once, then a single final answer", async () => {
+    const registry = createRegistry();
+    const fetch = createTool("fetch_url", "page content");
+    const calc = createTool("calculator", "4");
+    registry.register(fetch);
+    registry.register(calc);
+
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_f1", "fetch_url", '{"url":"https://example.com/page"}'),
+      ...toolCallRound("call_f2", "calculator", '{"expression":"2+2"}'),
+      ...plainAnswer("final"),
+    ]);
+
+    const events = (await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    )) as ChainEvent[];
+
+    expect(toolLifecycle(events)).toEqual([
+      "start:fetch_url",
+      "end:fetch_url",
+      "start:calculator",
+      "end:calculator",
+    ]);
+    expect(fetch.execute).toHaveBeenCalledTimes(1);
+    expect(calc.execute).toHaveBeenCalledTimes(1);
+    expect(events.filter((e) => e.type === "delta")).toEqual([{ type: "delta", text: "final" }]);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+
+    expect(assistantToolCallIds(calls[2].messages)).toEqual(["call_f1", "call_f2"]);
+    expect(toolResultIds(calls[2].messages)).toEqual(["call_f1", "call_f2"]);
+    expect(calls).toHaveLength(3);
+  });
+});
+
+describe("ChatOrchestrator — integration chain G: web_search -> fetch_url -> calculator -> final", () => {
+  const toolCallRound = (id: string, name: string, args = "{}") => [
+    {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { index: 0, id, type: "function", function: { name, arguments: args } },
+            ],
+          },
+        },
+      ],
+    },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    "[DONE]",
+  ];
+
+  const plainAnswer = (text: string) => [
+    { choices: [{ delta: { content: text } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+    "[DONE]",
+  ];
+
+  it("runs all three real tools in order, keeps prior results in context, then a forced no-tools final round", async () => {
+    const registry = createRegistry();
+    const search = createTool("web_search", "search result");
+    const fetch = createTool("fetch_url", "page content");
+    const calc = createTool("calculator", "42");
+    registry.register(search);
+    registry.register(fetch);
+    registry.register(calc);
+
+    const { client, calls } = createRecordingClient([
+      ...toolCallRound("call_g1", "web_search"),
+      ...toolCallRound("call_g2", "fetch_url", '{"url":"https://example.com/page"}'),
+      ...toolCallRound("call_g3", "calculator", '{"expression":"21*2"}'),
+      ...plainAnswer("final"),
+    ]);
+
+    const events = (await collect(
+      new ChatOrchestrator(client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("x")],
+        tools: registry,
+      }),
+    )) as ChainEvent[];
+
+    // Exactly three tool executions, each start immediately followed by its own
+    // end, in the documented order.
+    expect(toolLifecycle(events)).toEqual([
+      "start:web_search",
+      "end:web_search",
+      "start:fetch_url",
+      "end:fetch_url",
+      "start:calculator",
+      "end:calculator",
+    ]);
+    expect(search.execute).toHaveBeenCalledTimes(1);
+    expect(fetch.execute).toHaveBeenCalledTimes(1);
+    expect(calc.execute).toHaveBeenCalledTimes(1);
+
+    // Final answer and terminal done emitted exactly once; no contradictory
+    // second terminal event.
+    expect(events.filter((e) => e.type === "delta")).toEqual([{ type: "delta", text: "final" }]);
+    expect(events.filter((e) => e.type === "done")).toHaveLength(1);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+
+    // The forced no-tools final round already carries all three prior tool calls
+    // and results; the calculator round (calls[2]) already carries the earlier
+    // web_search and fetch_url results, proving prior results stay in context.
+    expect(assistantToolCallIds(calls[3].messages)).toEqual([
+      "call_g1",
+      "call_g2",
+      "call_g3",
+    ]);
+    expect(toolResultIds(calls[3].messages)).toEqual([
+      "call_g1",
+      "call_g2",
+      "call_g3",
+    ]);
+    expect(toolResultIds(calls[2].messages)).toEqual(["call_g1", "call_g2"]);
+
+    // The first three rounds carried all three tool definitions.
+    expect(roundToolNames(calls, 0)).toEqual(["web_search", "fetch_url", "calculator"]);
+    expect(roundToolNames(calls, 1)).toEqual(["web_search", "fetch_url", "calculator"]);
+    expect(roundToolNames(calls, 2)).toEqual(["web_search", "fetch_url", "calculator"]);
+
+    // The fourth round is the forced no-tools final round.
+    expect(calls).toHaveLength(4);
+    expect(roundToolNames(calls, 3)).toEqual([]);
+  });
+});
