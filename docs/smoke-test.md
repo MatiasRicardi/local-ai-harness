@@ -300,12 +300,18 @@ the same turn; a tool-calling model.
 **Expected results:**
 
 - [ ] Tools run **one at a time**: at most one tool call per model round, never in parallel.
-      Every execution that really runs emits exactly one `tool_start` immediately before it and
-      one `tool_end` right after. Pairs are **not** guaranteed for calls that never run: a call
-      rejected before execution (malformed arguments, unknown tool), one skipped because that
-      tool already reached its per-turn cap, or one cancelled mid-run legitimately has no
-      `tool_end`. What must never happen is a duplicated event or a `tool_end` without a
-      preceding `tool_start`.
+      The `tool_start` → `tool_end` pairing rule below applies to **successful** executions
+      only: one that returns normally emits exactly one `tool_start` immediately before it and
+      one `tool_end` right after. No pair is expected in the other cases:
+      - the call never runs (rejected before execution: malformed arguments, unknown tool) or
+        is skipped because that tool already reached its per-turn cap → no events at all;
+      - it is cancelled mid-run → `tool_start`, then silence;
+      - it **fails during execution** → `tool_start` is followed by the error, **not** by
+        `tool_end`. A `fetch_url` request rejected as a private/loopback destination is decided
+        inside the tool, so it shows `tool_start` and then `TOOL_EXECUTION_FAILED` with no
+        `tool_end` (see Flow G).
+      What must never happen is a duplicated event or a `tool_end` without a preceding
+      `tool_start`.
 - [ ] One turn performs at most **3** tool executions across at most **4** model rounds. Past
       that there are exactly three acceptable outcomes and no endless loop: the assistant
       answers with what it has, it answers saying it stopped at the limit, or — when the forced

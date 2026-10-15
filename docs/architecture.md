@@ -368,7 +368,11 @@ never advertises tool guidance, because it rejects tool requests.
    (tool name only, emitted only after the arguments validate and immediately
    before execution), `tool_end` (tool name only), and an optional `sources`
    event (backend-sanitized `{ id, title, url }` with safe `http(s)` URLs only
-   — never `content`, never a key or base URL). The turn runs as a bounded loop
+   — never `content`, never a key or base URL). `tool_end` and `sources` are emitted
+   only when an execution **returns**: a tool that throws after `tool_start` (a
+   destination rejected by the `fetch_url` policy, a timeout, a non-2xx response, a
+   non-textual or oversized body) is reported through the error path and never gets a
+   `tool_end`. The turn runs as a bounded loop
    of model rounds, each one with tools attached, executing at most
    `MAX_TOOL_EXECUTIONS_PER_TURN` (3) tools per turn and at most
    `MAX_MODEL_ROUNDS` (4) rounds. Every tool-enabled round is buffered; the
