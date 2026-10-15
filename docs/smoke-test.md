@@ -8,9 +8,10 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 
 Flows **E–H** cover the v1.2.0 features (runtime context, calculator, fetch URL and tool
 composition). They are written as instructions only and have **not** been executed here:
-this environment has no usable Docker and no live OpenAI-compatible model server. Run them
-as part of the release validation (`releases/v1.2.0-checklist.md`). Flows E, F, G and H
-need a model that actually emits tool calls.
+this environment has no usable Docker and no live OpenAI-compatible model server. They were
+also not run before `v1.2.0` was published, so they remain open as post-release verification
+(`releases/v1.2.0-checklist.md`). Flows E, F, G and H need a model that actually emits tool
+calls.
 
 ## Prerequisites
 

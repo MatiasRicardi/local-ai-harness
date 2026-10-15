@@ -1,7 +1,7 @@
 # AGENTS.md — Local AI Harness
 
-Context and mandatory rules for coding agents. Current code version: **1.2.0** (the
-`v1.2.0` release is prepared in `docs/releases/`; publication is a separate manual step).
+Context and mandatory rules for coding agents. Current code version: **1.2.0**, released
+as the published `v1.2.0` tag and GitHub Release (notes in `docs/releases/`).
 
 * Phase 1 = `instructions/phase1/` steps 01–25 — complete (historical reference).
 * Phase 2 = `instructions/phase2/` steps 26–36 — complete: optional model-driven web search on a generic tool foundation shipped in `v1.1.0`. Its MVP limits (one provider, one `web_search` tool, one call per user turn, no page fetching, no multi-hop agent) were superseded in `v1.2.0`.

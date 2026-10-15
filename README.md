@@ -4,8 +4,9 @@ Local AI Harness is a simple web interface for chatting with local AI models thr
 
 I built it because I wanted a clean way to experiment with local LLMs from a browser, connect different model servers, attach documents, and try local AI workflows without depending on a hosted AI service.
 
-Current version: `1.2.0`. The `v1.2.0` release is **prepared, not yet published** — no tag
-or GitHub Release exists yet (see [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md)).
+Current version: `1.2.0`, released as [`v1.2.0`](https://github.com/MatiasRicardi/local-ai-harness/releases/tag/v1.2.0) —
+the tag and the GitHub Release are published (see
+[`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md)).
 
 > Local AI Harness is mainly designed as a local, single-user developer tool. It is not intended to be exposed as a hardened multi-user production service.
 
