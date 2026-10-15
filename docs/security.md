@@ -13,6 +13,12 @@ Security posture of **Local AI Harness**, a local, single-user developer tool.
 - Uploaded documents are treated as **untrusted data**, never as instructions.
 - The browser↔backend channel is local; the app guards against the one remote
   exposure path it could introduce (a non-local API base over cleartext).
+- Tools are **opt-in**: nothing runs unless the user enables a tool and the model
+  asks for it. Enabling a tool adds an outbound network path (`web_search`,
+  `fetch_url`) that the model — not only the user — influences, which is why both
+  are off by default and guarded independently.
+- Model output and external web content are **not** a security boundary. They are
+  untrusted data rendered to the same user, on the same machine.
 
 ## Controls
 
@@ -37,6 +43,10 @@ file contents, or raw error details (mitigates CWE-22, path traversal).
 
 - `AI_REQUEST_TIMEOUT_MS` bounds upstream requests.
 - `AI_DEFAULT_PROVIDER_TIMEOUT_MS` bounds provider tests.
+- Tool network calls carry their own hard deadlines, independent of the model:
+  15 seconds for a whole `fetch_url` operation (initial request, every redirect
+  and the body read share one deadline) and 10 seconds for a Tavily search call.
+  See [Tool execution limits](architecture.md#tool-execution-limits).
 - The provider client distinguishes user/abort timeouts from provider errors.
 
 ### 4. CORS
@@ -80,9 +90,16 @@ closing the same CWE-319 gap for search base URLs.
   may interpret it as user-level prompt instructions; this is mitigated by
   sending it at user priority inside `<document>` delimiters beneath a
   system-level policy (see [Context management](architecture.md#context-management)).
+- **Web content returned by tools**: search snippets and fetched pages are remote
+  data. Each result is wrapped in a harness-authored boundary that repeats the
+  "reference data, not instructions" rule (`tools/untrustedContent.ts`) on top of
+  the capability-level system guidance. The two protections are complementary by
+  design: the guidance sets the policy for the turn, the per-result boundary stays
+  attached to the content even after earlier conversation is truncated.
 - **Markdown rendering**: the frontend renders with `markdown-it` (raw HTML
   disabled) and sanitizes the result with `DOMPurify` using an explicit
-  allowlist of tags and attributes.
+  allowlist of tags and attributes. Fetched page text is never rendered as HTML;
+  only source titles/URLs are, and URLs are sanitized (`http(s)` allowlist).
 - **SSE data**: null characters are stripped from provider stream data.
 
 ### 8. Credentials
@@ -108,9 +125,11 @@ model invokes `web_search`.
   provider receives it by dependency/config injection. Both the config validator and the
   provider require `https://`, closing the CWE-319 gap for the search path.
 - **External content is untrusted.** Web-search results are treated as untrusted
-  external data, never as system/developer instructions. The backend never follows
-  instructions found in results, and **no arbitrary result URLs are fetched** — only the
-  normalized sources (id, title, url) returned by the search API are surfaced.
+  external data, never as system/developer instructions, and the backend follows no
+  instruction found in them. **Web search does not fetch result pages**: only the
+  normalized sources (`id`, `title`, `url`) returned by the search API are surfaced.
+  Reading a page is a separate, separately opt-in capability (`fetch_url`) with its own
+  guards — see [§13](#13-fetch-url-and-ssrf).
 - **Query leaves the local environment.** Model inference can remain local, but when Web
   Search is enabled and the model invokes `web_search`, the search query is sent to the
   configured Tavily endpoint. This is why web search should not be described as fully
@@ -155,6 +174,110 @@ These messages may contain request-supplied metadata, including document
 filenames and validated timezone and locale values. They never contain uploaded
 document text, API keys, or raw error details, and they are never logged.
 
+### 11. Runtime context
+
+- The browser sends exactly two values: an **IANA timezone** and a **locale**. There is
+  no use of the Geolocation API, no IP-based location, no coordinates and no device
+  fingerprinting, and nothing is added to logs or persisted to satisfy this feature.
+- Both values are validated server-side before use (`provider/schemas.ts`): trimmed,
+  non-empty, length-capped (100 and 40 characters) and rejected unless `Intl` can build
+  a formatter / canonicalize the tag. A malformed or oversized value never reaches a
+  prompt.
+- The **timestamp comes from the backend clock**. A client cannot forge the current
+  instant, shift the model's date reasoning, or make the server claim a different time.
+- Because only a timezone and a locale cross the boundary, the exposed information is a
+  coarse, user-visible system setting — not a location and not an identity.
+- When the payload is absent (older clients, or a browser that refuses to report), a
+  UTC-only message is sent; nothing about the request fails.
+
+### 12. Calculator
+
+- Expressions are parsed by an explicit lexer and recursive-descent parser. There is
+  **no code-execution path**: no `eval`, no `new Function`, no `vm`, no `child_process`,
+  no dynamic `import` anywhere in the evaluator.
+- Arguments are validated by a strict schema: exactly one `expression` key, bounded
+  length, no extra keys, so a model-supplied payload cannot smuggle another instruction.
+- Token-count and recursion-depth caps stop a hostile expression from exhausting memory
+  or the call stack; failures are typed tool errors, not crashes.
+- The evaluator performs **no I/O**: no filesystem, network or environment access.
+- Arithmetic is IEEE-754 `number`, **not** arbitrary precision. Very large, very small
+  or non-integer results can be inexact; this is not a financial or compliance-grade
+  engine.
+- Residual: the calculator computes what the model asked for. A correct evaluation of a
+  wrong expression is still wrong, so treat tool output as data, not as authority.
+
+### 13. Fetch URL and SSRF
+
+`fetch_url` performs outbound HTTP **from the machine running the app**, which is usually
+inside a private or home network. Unguarded, that is a server-side request forgery (SSRF)
+primitive influenced by a model. Implemented controls:
+
+| Control | Behaviour |
+|---------|-----------|
+| Protocol allowlist | Only `http:` and `https:`; anything else (`file:`, `gopher:`, `data:`, …) is rejected before resolution. |
+| URL credentials | Rejected. `user:pass@host` never reaches the request. |
+| Public-network-only destination checks | Every resolved address must be public routable space. |
+| Blocked address ranges | IPv4 refuses `0.0.0.0/8`, `10/8`, `100.64/10` (carrier-grade NAT), `127/8` (loopback), `169.254/16` (link-local, including cloud metadata `169.254.169.254`), `172.16/12`, `192.0.0.0/24`, `192.168/16`, the documentation TEST-NETs, `198.18/15`, `224/4` (multicast) and `240/4` (reserved/broadcast). For IPv6 only global unicast `2000::/3` counts as public, so `::`, `::1`, `fc00::/7` (unique-local), `fe80::/10` (link-local), `ff00::/8` (multicast) and `2001:db8::/32` are refused, and IPv4-mapped/compatible literals are validated against the IPv4 rules instead of bypassing them. Literal-IP URLs are classified without DNS. |
+| DNS result checks | Names are resolved first and **all** answers are classified; a single non-public answer rejects the whole destination, and DNS failure is a safe error that never leaks resolver diagnostics. |
+| Redirect revalidation | Redirects are followed manually (`redirect: "manual"`); each `Location` hop is re-parsed and re-validated by the same policy before the next request, so a public URL cannot be used as a jump to a private target. A sixth redirect is rejected. |
+| Time and size caps | 15-second deadline for the whole operation; body streaming aborts past 1 MiB (`Content-Length` is a hint, never authority). |
+| Textual MIME allowlist | `text/*`, `application/json`, `application/xml`, `application/xhtml+xml` and `+json`/`+xml` variants. Missing or unknown `Content-Type` fails closed; binaries (PDF, images, archives) are rejected unread. |
+| Fixed request headers | No cookies are stored or sent, no provider or API keys are attached, and the model controls only the URL — never a header. |
+| No JavaScript | Pages are reduced to text; nothing is executed and no browser context exists. |
+| Untrusted labelling | Fetched text is delivered inside an explicit untrusted boundary and marked as reference data. |
+
+**Residual limitations — read before enabling `fetch_url` on a shared or sensitive
+network:**
+
+- **DNS rebinding / TOCTOU.** The policy resolves and classifies addresses *before*
+  connecting, but it does **not** pin the subsequent connection to the validated
+  addresses. A record that flips between validation and connection (short TTL) can route
+  the request somewhere that was never approved. Redirect revalidation solves a different
+  problem (a public URL pointing at a private one) and does **not** eliminate DNS
+  rebinding. Closing it needs connection pinning at the transport layer.
+- **Public hosts that reach internal services.** A genuinely public hostname (a proxy,
+  a web preview service, an image optimizer) can fetch internal URLs on behalf of the
+  caller. Address classification cannot distinguish it from an ordinary site.
+- **Cleartext.** `http://` is allowed for public hosts, so such a request and its
+  response can be observed or modified on path. No cookies or credentials are attached,
+  and no fetched content is trusted because of the transport.
+- **Information disclosure by design.** The destination learns a request came from the
+  user's network, plus the requested URL and the harness user-agent; the retrieved text
+  is then handed to the model, which may quote it. Do not point `fetch_url` at URLs you
+  would not want revealed or fed into a model.
+- **Incomplete pages.** JavaScript-rendered content, logins and paywalls are absent, so
+  a page can look empty or different from what a browser shows.
+
+These controls **reduce** SSRF risk; they do not eliminate it, and they are not a
+substitute for network egress controls. Local AI Harness remains a single-user local tool:
+running it as a hostile multi-user or internet-facing service would require further
+hardening (pinning, egress allowlists, per-user policy, sandboxed egress).
+
+### 14. Prompt injection from external content
+
+- Search snippets, fetched pages and uploaded documents may all contain adversarial
+  instructions aimed at the model.
+- The mitigations are layered: server-authored system policy, capability-aware guidance
+  that states external content is untrusted, per-result untrusted boundaries, untrusted
+  material kept at **user** priority while policy stays at **system** priority, and source
+  attribution taken from harness metadata rather than from remote text (so a page cannot
+  rename itself or claim another source's id).
+- These measures **reduce** the chance that the model obeys embedded instructions. They do
+  not eliminate it: prompt injection in LLMs is not mathematically closable, and a model
+  can still be steered by content it reads.
+- The **blast radius is bounded by what the user already enabled**. External content can
+  influence the answer and the choice of already-enabled tools, but it cannot register a
+  tool, raise a per-turn cap, obtain a key, change the fetch-URL address policy, or reach
+  the filesystem — those are enforced in code, not by the prompt. Nothing in page text, a
+  search snippet or an uploaded document is consulted when the code decides what is a
+  permitted destination: the protocol/credential rules, DNS address classification and
+  redirect revalidation in [§13](#13-fetch-url-and-ssrf) run from harness state only, so
+  remote content cannot widen them. That is a **risk reduction**, not a guarantee against
+  SSRF: the residual gaps in §13 (notably DNS rebinding, and public hosts that front
+  internal services) stay open regardless of the prompt.
+- Practical guidance: enable tools only for the turns that need them, treat suggested
+  links as unverified, and avoid combining untrusted documents with tool-enabled turns.
+
 ## Out of scope (by design)
 
 These are intentionally **not** implemented and are documented as such:
@@ -164,6 +287,9 @@ These are intentionally **not** implemented and are documented as such:
 - TLS/HTTPS termination for exposed deployments (the app is local/single-user).
 - OCR for PDFs (text extraction only).
 - Runtime templating of `nginx.conf` (e.g. `envsubst`).
+- Connection pinning for `fetch_url` (the DNS-rebinding caveat in [§13](#13-fetch-url-and-ssrf)
+is documented rather than closed).
+- Sandboxed or allowlisted network egress for tool traffic.
 
 ## Notes for contributors
 

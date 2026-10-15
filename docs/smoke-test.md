@@ -6,6 +6,12 @@ against a real OpenAI-compatible model server (Ollama, llama.cpp, or LM Studio).
 > This verifies the app runs and the main paths work. It does not validate the
 > quality of model output.
 
+Flows **E–H** cover the v1.2.0 features (runtime context, calculator, fetch URL and tool
+composition). They are written as instructions only and have **not** been executed here:
+this environment has no usable Docker and no live OpenAI-compatible model server. Run them
+as part of the release validation (`releases/v1.2.0-checklist.md`). Flows E, F, G and H
+need a model that actually emits tool calls.
+
 ## Prerequisites
 
 - A model server reachable from the machine running the app, e.g.:
@@ -95,8 +101,9 @@ local models do **not**.
    step 11).
 2. Configure a tool-capable local model in **Model Settings**, then send a
    message to confirm tool calling works.
-3. Open **Web Search settings** (separate from provider settings) and enter your
-   Tavily API key. The key is stored only in your browser and sent to the backend
+3. Open the **Web Search** card in the **Model Settings** sidebar (alongside
+   **Connection Endpoint**, **Context & Runtime** and **Built-in Tools**) and enter
+   your Tavily API key. The key is stored only in your browser and sent to the backend
    only while web search is enabled.
 4. Enable **Web Search**.
 5. Ask a question that needs fresh/external information (e.g. "What is the weather
@@ -106,7 +113,10 @@ local models do **not**.
 7. Verify the **Sources** section lists the origin links.
 8. Click a source to open the original URL.
 9. Click **Stop** mid-turn and confirm generation halts (including the search).
-10. Disable **Web Search** and confirm ordinary chat still works.
+10. Disable **Web Search** and confirm ordinary chat still works. With **Calculator** and
+    **Fetch URL** off as well, no tool is registered at all, so the turn streams immediately
+    and progressively; disabling only web search while a built-in tool stays enabled keeps the
+    orchestrated (buffered) path.
 11. (Optional) Override `AI_TAVILY_BASE_URL` to a controlled test endpoint, restart
     the backend, and confirm the search still runs through the new base URL. The
     frontend has no field for the base URL, so it cannot be changed from the UI.
@@ -132,8 +142,9 @@ Presentation-only; no model server response is required for most of them.
    context window. Nothing in the header is invented, and the status dot stays
    neutral until a connection test has been run (it is not a health poll).
 2. **Model Settings** cards (Connection Endpoint / Context & Runtime /
-   Web Search) scroll independently, and the **Test Connection** footer stays
-   pinned and visible while scrolling.
+   Web Search / Built-in Tools) scroll independently, and the **Test Connection**
+   footer stays pinned and visible while scrolling. Only Built-in Tools holds the
+   Calculator and Fetch URL switches; Web Search has its own card.
 3. The header dot turns amber while testing, then green/red with the result
    panel in the footer.
 4. Clear the **Base URL** field: **Test Connection** becomes disabled.
@@ -152,6 +163,178 @@ Presentation-only; no model server response is required for most of them.
 
 ---
 
+## Flow E — Runtime context
+
+**Objective:** confirm the model is told the current date, time and timezone from the
+**backend clock**, and that the two failure shapes stay separate: a **missing** runtime
+payload still answers (UTC fallback), a **malformed** one fails with a structured validation
+error instead of a crash.
+
+**Prerequisites:** default settings (all tools off). There is **no** Runtime-context
+switch in the UI — the browser timezone and locale are collected automatically and sent on
+streaming requests, which is the behaviour under test.
+
+1. Start the app as in Flow A, on a machine set to a non-UTC timezone.
+2. Ask: “What is today's date, and what time is it in my timezone right now?”
+3. Compare the answer with the machine's actual date, time and timezone.
+4. Change the operating-system timezone (or start the browser with a different `TZ`),
+   reload, and ask again.
+5. Negative cases with `curl` against `POST /api/chat/stream`: send
+   `runtimeContext: { timeZone: "Not/AZone", locale: "en-US" }`, then an over-length
+   `locale`, then omit `runtimeContext` entirely.
+
+**Expected results:**
+
+- [ ] The answer states the current date and the **browser's** timezone, consistent with
+      the machine clock: the browser supplies timezone and locale only, the instant always
+      comes from the backend clock.
+- [ ] After the timezone changes, the next turn reflects the new zone (no restart needed).
+- [ ] A malformed or over-length runtime value is rejected with `VALIDATION_ERROR` and a
+      field-level `detail`; omitting the field is accepted, chat works, and the backend
+      message falls back to UTC.
+- [ ] Nothing about the runtime payload is logged by the backend, and the settings UI
+      correctly offers no toggle for it.
+
+---
+
+## Flow F — Calculator
+
+**Objective:** confirm the model can evaluate arithmetic through `calculator`, that its
+input bounds hold, and that there is no code-execution path.
+
+**Prerequisites:** a local model that emits tool calls. Enable **Calculator** in the
+**Built-in Tools** card of the **Model Settings** sidebar.
+
+1. Ask: “Use a calculation to work out `(128 * 7) + 42` and explain the steps.”
+2. Watch the tool activity in the transcript, then read the answer.
+3. Ask the model to run something that is not arithmetic, e.g. “Use the calculator to run
+   `process.exit(1)`.”
+4. Ask for input that breaks the engine bounds: division by zero, and an expression nested
+   deeper than the 64-level parse limit (`MAX_PARSE_DEPTH`). A shallower nesting such as
+   `(((((((((((((1)))))))))))))` is only 13 levels deep: it is **valid** and is expected to
+   evaluate to `1`, not to fail.
+5. Disable **Calculator** and ask the first question again.
+
+**Expected results:**
+
+- [ ] A `tool_start` labelled “Calculating…” appears and is followed by `tool_end`, then
+      the answer uses the correct result (`938` in step 1).
+- [ ] The transcript never shows raw tool JSON, a provider `tool` role, or a tool-call id.
+- [ ] Step 3 never executes code: only numbers, `+ - * / % ^`, parentheses and unary signs
+      are accepted, and nothing is passed to `eval`/`Function`/a shell. Which stable error
+      appears depends on where the call breaks, and both are acceptable outcomes:
+      - the model calls the tool with an expression the engine rejects (`process.exit(1)`,
+        `import('fs')`, …) → `VALIDATION_ERROR` (`Invalid calculator expression.`), raised in
+        argument validation **before** any `tool_start`;
+      - the tool call itself is malformed (empty/unparseable `function.arguments`, missing
+        call id, non-`function` type) → `TOOL_INVALID_ARGUMENTS`
+        (`The model returned a malformed tool call. Retry without requesting tools.`), also
+        with no `tool_start`.
+      A model that simply refuses and answers without calling the tool is a valid outcome too:
+      the deterministic input validation itself is asserted by the automated calculator tests
+      (`backend/src/tools/__tests__/calculatorExpression.test.ts`,
+      `calculatorTool.test.ts`), not by this manual flow.
+- [ ] Step 4 produces a stable `VALIDATION_ERROR` for the division by zero (the engine
+      refuses it instead of inventing a value) and for input past the length/token/depth
+      bounds, or an answer without a tool, and the backend stays healthy for the next message.
+- [ ] With **Calculator** off the same question never triggers a `calculator` event: the
+      tool is not offered, so it cannot be called.
+
+---
+
+## Flow G — Fetch URL
+
+**Objective:** confirm `fetch_url` reads a public page as text, honours its guards, and
+never reaches an internal address.
+
+**Prerequisites:** a tool-calling model, and internet access from the machine running the
+backend.
+
+1. Enable **Fetch URL** in the tools settings card (Web Search may stay off).
+2. Ask: “Fetch `https://example.com/` and tell me what the page says.”
+3. Ask it to fetch a non-existent public path (404), then an internal address:
+   `http://127.0.0.1:3000/api/health` and `http://169.254.169.254/latest/meta-data/`.
+4. Ask it to fetch a binary URL (a PDF or a PNG).
+5. Start a fetch of a large page and press **Stop** while it runs.
+6. Turn the network off on the backend host (or point at an unreachable host) and try
+   again.
+
+**Expected results:**
+
+- [ ] Step 2 shows “Reading a web page…”, then an answer built from the page text, and the
+      conversation gains a `[1]` source titled with the page `<title>` (or the hostname
+      when there is no usable title) linking to the fetched URL.
+- [ ] The `[N]` label always comes from the harness: text inside the page such as `[1]`,
+      “system” or another site's name never renames or invents a source.
+- [ ] The 404 is a safe tool error; the loopback and metadata addresses are refused as
+      non-public destinations. Both surface as `TOOL_EXECUTION_FAILED` **after** `tool_start`
+      (the destination decision is made at execution time, so no `tool_end` follows), with no
+      resolver detail and no internal payload in the response or the logs.
+- [ ] A binary response is rejected because it is not textual, and nothing is stored.
+- [ ] Stopping mid-fetch leaves a stopped message with the sources already accumulated and
+      issues no further tool activity.
+- [ ] The unreachable case surfaces as a connection/timeout tool error and the next
+      message still works.
+
+---
+
+## Flow H — Tool composition (`web_search` → `fetch_url` → answer)
+
+**Objective:** confirm a bounded multi-tool turn: sequential execution, the per-turn caps,
+accumulated sources, and reliability across repeats.
+
+**Prerequisites:** Web Search (valid Tavily key), Fetch URL and Calculator all enabled in
+the same turn; a tool-calling model.
+
+1. Ask something that needs a search and then a page, e.g. “Search for the official
+   Fastify documentation on reply hijacking, open the best result, and quote the relevant
+   part.”
+2. Watch the sequence of tool events, then inspect the source list.
+3. Ask something that wants more work than the caps allow, e.g. several searches and
+   several pages in one turn.
+4. Ask a mixed question, e.g. “Search for the current Fastify version, then calculate
+   `(that year * 2)`.”
+5. Repeat the step‑1 prompt **five times** and note how often a tool call happens at all.
+6. Press **Stop** during the second tool of a chain.
+
+**Expected results:**
+
+- [ ] Tools run **one at a time**: at most one tool call per model round, never in parallel.
+      The `tool_start` → `tool_end` pairing rule below applies to **successful** executions
+      only: one that returns normally emits exactly one `tool_start` immediately before it and
+      one `tool_end` right after. No pair is expected in the other cases:
+      - the call never runs (rejected before execution: malformed arguments, unknown tool) or
+        is skipped because that tool already reached its per-turn cap → no events at all;
+      - it is cancelled mid-run → `tool_start`, then silence;
+      - it **fails during execution** → `tool_start` is followed by the error, **not** by
+        `tool_end`. A `fetch_url` request rejected as a private/loopback destination is decided
+        inside the tool, so it shows `tool_start` and then `TOOL_EXECUTION_FAILED` with no
+        `tool_end` (see Flow G).
+      What must never happen is a duplicated event or a `tool_end` without a preceding
+      `tool_start`.
+- [ ] One turn performs at most **3** tool executions across at most **4** model rounds. Past
+      that there are exactly three acceptable outcomes and no endless loop: the assistant
+      answers with what it has, it answers saying it stopped at the limit, or — when the forced
+      no-tools final round still returns a tool call — the turn ends with the stable
+      `TOOL_CALL_LIMIT_EXCEEDED` error (`The model returned a tool call when no tools were
+      available.`). A model that puts two tool calls in one round is rejected the same way
+      (`The model tried to use tools more than once. Retry without requesting tools.`). Either
+      way there is never a fourth tool execution.
+- [ ] `web_search` runs at most **once** per turn and `fetch_url` at most **twice**,
+      however the model phrases its follow-ups.
+- [ ] The source list is de-duplicated by URL, keeps stable `[N]` labels for the whole
+      turn, and mixes search hits and fetched pages without renumbering earlier sources.
+- [ ] The answer cites `[N]` markers; content that came only from a fetched page is
+      attributed to that source, and a turn with no usable result says so instead of
+      implying a source.
+- [ ] Repeated identical prompts may or may not call tools (the model decides); every
+      attempt must still produce a valid answer, valid history and no orphaned tool event.
+      This is a reliability check, not a tool-call-rate check.
+- [ ] Stopping mid-chain keeps the partial message plus its sources, marks the message as
+      stopped, and the next message still works (history stays valid for the model).
+
+---
+
 ## Expected results summary
 
 | Step                         | Expected                          |
@@ -165,6 +348,10 @@ Presentation-only; no model server response is required for most of them.
 
 | Web search turn (Flow C)     | Search activity + cited sources   |
 | Disable web search           | Ordinary chat resumes             |
+| Runtime context (Flow E)     | Backend-clock date + user timezone |
+| Calculator (Flow F)          | Correct result; non-arithmetic refused |
+| Fetch URL (Flow G)           | Page text + `[N]` source; private targets refused |
+| Tool composition (Flow H)    | Sequential tools within the caps, de-duplicated sources |
 
 ## If something fails
 
