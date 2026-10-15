@@ -267,8 +267,14 @@ hardening (pinning, egress allowlists, per-user policy, sandboxed egress).
   can still be steered by content it reads.
 - The **blast radius is bounded by what the user already enabled**. External content can
   influence the answer and the choice of already-enabled tools, but it cannot register a
-  tool, raise a per-turn cap, obtain a key, cross the fetch-URL address policy, or reach
-  the filesystem — those are enforced in code, not by the prompt.
+  tool, raise a per-turn cap, obtain a key, change the fetch-URL address policy, or reach
+  the filesystem — those are enforced in code, not by the prompt. Nothing in page text, a
+  search snippet or an uploaded document is consulted when the code decides what is a
+  permitted destination: the protocol/credential rules, DNS address classification and
+  redirect revalidation in [§13](#13-fetch-url-and-ssrf) run from harness state only, so
+  remote content cannot widen them. That is a **risk reduction**, not a guarantee against
+  SSRF: the residual gaps in §13 (notably DNS rebinding, and public hosts that front
+  internal services) stay open regardless of the prompt.
 - Practical guidance: enable tools only for the turns that need them, treat suggested
   links as unverified, and avoid combining untrusted documents with tool-enabled turns.
 

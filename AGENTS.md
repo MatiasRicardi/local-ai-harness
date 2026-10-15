@@ -19,7 +19,7 @@ Not implemented: authentication, database/backend persistence, OCR, multiple doc
 
 **Tools** (foundation in v1.1.0, extended in v1.2.0): the backend drives model-invoked tools through a request-scoped `ToolRegistry`, streams `tool_start`/`tool_end`/`sources` lifecycle events, and the UI shows tool activity and source links. The tools are `web_search` (Tavily), `fetch_url` (read the textual content of one public HTTP(S) URL) and `calculator` (evaluate one arithmetic expression, no code-execution path). Each is a separate opt-in, off by default. A streaming turn may chain tools **sequentially** — at most 4 model rounds and 3 tool executions per turn, one tool call per round, never in parallel — finishing with the answer plus de-duplicated `[N]` sources. Tool calling follows the OpenAI-compatible tool schema the model returns; whether a given local model issues tool calls at all is up to that model/server (see `docs/architecture.md`).
 
-**Runtime context**: a streaming request may carry the browser's IANA timezone and locale; the backend builds a server-authored system message with the current date, time and timezone from its own clock, and omits it when the payload is absent or invalid.
+**Runtime context**: a streaming request may carry the browser's IANA timezone and locale; the backend builds a server-authored system message with the current date, time and timezone from its own clock (never a client-provided instant). Absent and invalid are different cases: a request with **no** `runtimeContext` is accepted and the message falls back to a UTC-only form that states the user's local timezone and local date/time are unavailable, while a **present but invalid** `timeZone`/`locale` is rejected by the request schema as `VALIDATION_ERROR` with field-level detail.
 
 ## Layout
 
@@ -41,9 +41,10 @@ frontend/   Vue 3.5 + Vite 8 + TS + Tailwind CSS v4
                    WebSearch, BuiltInTool), ChatMessages, ChatInput, ChatEmptyState,
                    DocumentAttachment, AppIcon
   src/services/    apiBase, provider, chat, files (fetch + SSE client)
-  src/composables/ useProviderSettings, useRuntimeContext, useWebSearchSettings,
+  src/composables/ useProviderSettings, useWebSearchSettings,
                    useToolSettings, useConnectionTest (localStorage / shared test result)
-  src/utils/       markdown.ts (render+sanitize), parseApiError.ts, runtimeContext.ts
+  src/utils/       markdown.ts (render+sanitize), parseApiError.ts,
+                   runtimeContext.ts (browser timezone/locale collection → `runtimeContext`)
 docs/       architecture.md, security.md, docker.md, smoke-test.md, releases/
 docker-compose.yml   backend + frontend; the model server stays on the host
 ```
@@ -108,10 +109,16 @@ interface ChatRequest {
 
 Only `POST /api/chat/stream` offers tools: `POST /api/chat` rejects requests that carry
 `webSearch` or an enabled `tools` entry, and returns no guidance. For a streaming turn the
-backend appends the capability-aware tool guidance as a `system` message **immediately
-after** the conversation's last visible user message, and that message is orchestration
-state only — it is never returned to the browser as history. Streaming may emit
-`tool_start`, `tool_end` and `sources` events in addition to `start`/`delta`/`done`.
+backend composes the capability-aware tool guidance as a server-authored `system` message
+that sits **ahead of the conversation**, never after the last user message: the
+server-authored block from `buildServerSystemMessages()` is ordered runtime context → tool
+guidance → document policy, followed by the document content as a `user` message and then
+the conversation history. That guidance message is orchestration state only — it is never
+returned to the browser as history. Only a request with every capability off registers no
+tool and streams directly and progressively; any single enabled tool puts the turn on the
+orchestrated path, where every tool round before the last is buffered and only the forced
+no-tools final round streams progressively. Streaming may emit `tool_start`, `tool_end` and
+`sources` events in addition to `start`/`delta`/`done`.
 
 Errors always use the envelope `{ error: { code, message, detail? } }`. `AppErrorCode` values live in `backend/src/utils/errorHandler.ts`; reuse an existing code before adding one, and keep `frontend/src/utils/parseApiError.ts` in sync.
 
@@ -131,7 +138,7 @@ All deletions go through `files/cleanup.ts`: anchored to the upload directory, t
 
 Both chat routes apply `context/context-budget.ts` before calling the provider: the document is truncated to fit `context.maxTokens`, or the request fails with `DOCUMENT_CONTEXT_TOO_LARGE` / `CONTEXT_TOO_LARGE`.
 
-Treat document content as **untrusted data, not instructions**. The backend injects a system-priority policy message plus the document text at **user** priority inside `<document>` delimiters (instruction hierarchy), and must state when an answer is not supported by the uploaded document.
+Treat document content as **untrusted data, not instructions**. The backend injects a system-priority policy message plus the document text at **user** priority inside `<document>` delimiters (instruction hierarchy), and must state when an answer is not supported by the uploaded document. The document policy is the last of the server-authored system messages (`buildServerSystemMessages()`: runtime context → tool guidance → document policy), and the document content follows as a `user` message ahead of the conversation history.
 
 ## Security Invariants
 

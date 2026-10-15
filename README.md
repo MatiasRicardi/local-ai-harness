@@ -4,7 +4,8 @@ Local AI Harness is a simple web interface for chatting with local AI models thr
 
 I built it because I wanted a clean way to experiment with local LLMs from a browser, connect different model servers, attach documents, and try local AI workflows without depending on a hosted AI service.
 
-Current release: `v1.2.0`
+Current version: `1.2.0`. The `v1.2.0` release is **prepared, not yet published** — no tag
+or GitHub Release exists yet (see [`docs/releases/v1.2.0.md`](docs/releases/v1.2.0.md)).
 
 > Local AI Harness is mainly designed as a local, single-user developer tool. It is not intended to be exposed as a hardened multi-user production service.
 
@@ -125,9 +126,10 @@ PDF support is limited to files with selectable text. OCR is not included.
 ## Built-in tools
 
 The streaming chat endpoint can offer the model three optional tools. All of them are
-**off by default**, are toggled in the **Built-in Tools** card of Provider settings (kept
-in your browser), and do
-nothing unless your model actually issues a tool call.
+**off by default**, are toggled in the **Model Settings** sidebar and kept in your browser,
+and do nothing unless your model actually issues a tool call.
+**Calculator** and **Fetch URL** live in the **Built-in Tools** card; **Web search** has its
+own **Web Search** card (enable switch plus Tavily key).
 
 - **Calculator** — evaluates one arithmetic expression with deterministic code instead of
   model arithmetic. Expressions go through an explicit tokenizer and recursive-descent
@@ -136,7 +138,8 @@ nothing unless your model actually issues a tool call.
   supplied or that the model found in a search result. Textual responses only
   (`text/*`, JSON, XML), with hard limits on size, redirects and time. No JavaScript, no
   browser rendering, no cookies, and private / loopback / link-local destinations are
-  refused.
+  refused by the destination policy — which reduces SSRF risk without eliminating it (see
+  the residual risks in [security](docs/security.md)).
 - **Web search** — the Tavily-backed `web_search` tool, described in the next section.
 
 Tools run **sequentially** inside a single user turn (parallel tool calls are not
@@ -171,7 +174,7 @@ Web search starts with **Tavily** as the first provider. To use it:
 
 1. Create a Tavily account and generate an API key.
 2. Run Local AI Harness (`pnpm dev` or `docker compose up --build`).
-3. Open the **Web Search** card in Provider settings and paste your key.
+3. Open the **Web Search** card in the **Model Settings** sidebar and paste your key.
    The key is stored only in your browser and is sent to the backend only while web
    search is enabled.
 4. Enable **Web Search**.

@@ -310,7 +310,11 @@ its own clock (never a client-provided "now") and prepends a server-authored
 system message (`buildRuntimeContextMessage`) describing the UTC timestamp, the
 user's local date/time, timezone, UTC offset, weekday and locale. When
 `runtimeContext` is absent (older clients) a UTC-only message is sent and the
-user-local fields are reported as unavailable. The message is injected ahead of
+user-local fields are reported as unavailable; when the object is present but a
+field is malformed or over-length (`isValidTimeZone` /
+`isValidLocale`, `backend/src/provider/schemas.ts`) the whole request is rejected
+with `VALIDATION_ERROR` and field-level detail instead of degrading to the
+fallback. The message is injected ahead of
 all conversation content (before tool guidance, document context and the
 conversation), and its exact content is counted against the context budget.
 
@@ -343,20 +347,22 @@ never advertises tool guidance, because it rejects tool requests.
 2. `chat.ts` calls `POST /api/chat/stream` and streams SSE events.
 3. If a document is attached, the backend inserts a document-context block and a
    document-content block ahead of the conversation (see [Context management](#context-management)).
-4. When **no built-in tool is registered**, the backend forwards the messages
+4. When **no tool is registered** — Web Search disabled **and** no built-in tool
+   enabled — the backend forwards the messages
    (runtime context, document policy and content, conversation) to the model
    server and pipes the SSE stream straight back to the browser — live,
-   progressive streaming, unchanged from v1.0.0. When **a built-in tool is
-   enabled**, the first model round is **accumulated** (buffered) rather than
-   streamed live: the model may emit filler text before deciding whether to call
-   a tool, and that preliminary text is discarded rather than shown (see
-   [Documented decision: first-round buffering](#documented-decision-first-round-buffering-with-web-search)).
-   Built-in tools follow the same buffering model: the client sends
+   progressive streaming, unchanged from v1.0.0. When **any tool is enabled** —
+   `web_search`, `calculator` or `fetch_url` — the first model round is
+   **accumulated** (buffered) rather than streamed live: the model may emit filler
+   text before deciding whether to call a tool, and that preliminary text is
+   discarded rather than shown (see
+   [Documented decision: buffered tool rounds](#documented-decision-buffered-tool-rounds)).
+   The client sends
    `tools: { calculator?: boolean; fetchUrl?: boolean }` (only the enabled tools,
-   never an explicit `false`) on the streaming request, so when a built-in tool
-   is on the first model round is buffered exactly like web search. The tool
-   guidance message prepends the conversation only when a tool is enabled,
-   advertising exactly the tools that are registered.
+   never an explicit `false`) on the streaming request, and the same buffering
+   model applies to every tool. The tool guidance message is one of the
+   server-authored system messages placed **ahead of** the conversation, and only
+   when a tool is enabled, advertising exactly the tools that are registered.
    Each tool execution is orchestrated and its lifecycle is exposed as
    structured SSE events between `start` and the final answer: `tool_start`
    (tool name only, emitted only after the arguments validate and immediately
@@ -396,11 +402,12 @@ local model supports. Requirements:
 - support for the OpenAI-style fields used here (`type: "function"`,
   `function.name`, `function.arguments`, `tool_call_id`).
 
-Tool calling is **not** guaranteed for all local models. When Web Search is
-**disabled**, no tools are registered and the turn streams live and progressive
-exactly like v1.0.0. When Web Search is **enabled** but the model does not call
+Tool calling is **not** guaranteed for all local models. Only when **every** capability
+is off — Web Search disabled and `calculator` / `fetchUrl` both off — is no tool
+registered, and the turn then streams live and progressive exactly like v1.0.0. When a
+tool is **enabled** but the model does not call
 a tool, the turn still completes — but the first round was accumulated (see
-[Documented decision: first-round buffering with Web Search](#documented-decision-first-round-buffering-with-web-search)),
+[Documented decision: buffered tool rounds](#documented-decision-buffered-tool-rounds)),
 so the buffered text is flushed at the end rather than shown progressively; this
 is not the same immediate streaming as the no-tools path. A model that requests
 an unknown tool, malformed arguments, or more calls than the per-turn cap
@@ -431,28 +438,29 @@ give their ids back to the accumulator. Each `sources` event carries the complet
 cumulative list of the turn (the frontend replaces `message.sources` per event), so a tool
 that contributes nothing, such as `calculator`, re-emits the existing list unchanged.
 
-### Documented decision: first-round buffering with Web Search
+### Documented decision: buffered tool rounds
 
-When Web Search is enabled, every tool-enabled model round is buffered before
-its text is emitted. This is a deliberate design decision (v1.1.0 buffering,
-extended to each round in v1.2.0): the model frequently emits short filler text
-("I'll search for that…") before deciding whether to call the `web_search`
-tool, and showing that preliminary text — only to discard it when the tool is
-called — would be worse than buffering it.
+Whenever **any** tool is enabled — not `web_search` alone — every tool-enabled model round
+is buffered before its text is emitted. This is a deliberate design decision (v1.1.0
+buffering, extended to each round in v1.2.0): the model frequently emits short filler text
+("I'll search for that…") before deciding whether to call a tool, and showing that
+preliminary text — only to discard it when the tool is called — would be worse than
+buffering it.
 
 Consequences for what the user sees:
 
-- **Web Search enabled, model calls a tool, then a later tool-enabled round
+- **A tool enabled, model calls a tool, then a later tool-enabled round
   returns plain text** — that round's buffered text is flushed at the end as a
   single `start`/`delta`/`done` sequence; it is **not** shown progressively.
-- **Web Search enabled, model keeps calling tools until the cap** — the forced
+- **A tool enabled, model keeps calling tools until the cap** — the forced
   **no-tools** final round (the round after `MAX_TOOL_EXECUTIONS_PER_TURN`
   executions) is streamed **live, progressively, token by token**. This is the
   only tool-path answer that streams progressively.
-- **Web Search enabled, model does not call a tool** — the buffered first-round
+- **A tool enabled, model does not call a tool** — the buffered first-round
   text is flushed at the end as a single `start`/`delta`/`done` sequence; it is
   not shown progressively.
-- **Web Search disabled** — no tools are registered, so the turn streams live and
+- **All capabilities off** (Web Search disabled and `calculator` / `fetchUrl`
+  off) — no tools are registered, so the turn streams live and
   progressive immediately, unchanged from v1.0.0.
 
 The buffering is intentional, not a regression: it avoids leaking preliminary,
