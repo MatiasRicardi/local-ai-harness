@@ -65,6 +65,17 @@ export function finishFrame(finishReason: FakeFinishReason): string {
   });
 }
 
+/**
+ * A content chunk with the `finish_reason` property **absent** rather than present
+ * and `null`. Most OpenAI-compatible servers omit the key on intermediate chunks, so
+ * this is the shape they actually put on the wire. It is a separate builder because a
+ * test that claims to cover a missing `finish_reason` must not be satisfied by a
+ * fixture that sends `"finish_reason": null`.
+ */
+export function contentFrameOmittingFinishReason(text: string): string {
+  return sseFrame({ choices: [{ index: 0, delta: { content: text } }] });
+}
+
 /** A streamed `delta.tool_calls[]` entry, split the way a real server splits it. */
 export function toolCallFrame(
   fragment: FakeToolCallFragment,
@@ -149,6 +160,46 @@ export function answerRoundWithoutFinishReason(text = "Sunny tomorrow."): FakeRo
   return { name: "answer-without-finish-reason", frames, toolCallCount: 0, hasDoneMarker: true };
 }
 
+/**
+ * The same shape as {@link answerRoundWithoutFinishReason}, but with the
+ * `finish_reason` property **missing from every chunk** instead of present and
+ * `null` — what most OpenAI-compatible servers actually send. Both metadata
+ * records leave `finishReason` unset, meaning "this round never mentioned a
+ * finish reason at all".
+ */
+export function answerRoundWithoutFinishReasonProperty(text = "Sunny tomorrow."): FakeRound {
+  const frames = [contentFrameOmittingFinishReason(text), doneFrame()];
+  return {
+    name: "answer-without-finish-reason-property",
+    frames,
+    toolCallCount: 0,
+    hasDoneMarker: true,
+  };
+}
+
+/**
+ * An answer whose text chunks each carry a `U+0000`. JSON escaping means the NUL
+ * is not visible in {@link framesToText} output, so the guarantee has to be
+ * asserted on what the layers emit after parsing: the parser forwards the NUL and
+ * the SSE layers are the ones that must remove it.
+ */
+export function answerRoundWithNullCharacters(
+  chunks: string[] = ["2 + 2 = \u0000 4", "I am \u0000 sure."],
+): FakeRound {
+  const frames = chunks.map(
+    (chunk, position) =>
+      contentFrame(chunk, position === chunks.length - 1 ? "stop" : null),
+  );
+  frames.push(doneFrame());
+  return {
+    name: "answer-with-null-characters",
+    frames,
+    toolCallCount: 0,
+    hasDoneMarker: true,
+    finishReason: "stop",
+  };
+}
+
 /** A text answer whose stream ends at transport EOF: no `[DONE]` marker. */
 export function answerRoundWithoutDoneMarker(text = "Half an answer"): FakeRound {
   return {
@@ -225,10 +276,123 @@ export function contradictoryToolCallsRound(): FakeRound {
   };
 }
 
+/**
+ * A tool round that streams **no text at all**: only `delta.tool_calls` fragments,
+ * then `finish_reason: "tool_calls"`. Several strict/JSON-style servers emit this
+ * shape, and it is why a preview event cannot be assumed to precede every tool
+ * round (contract §7): there is no provisional text to preview, commit or discard.
+ * `v1.2.0` already executes such a round.
+ */
+export function toolRequestRoundWithoutText(options: {
+  toolName?: string;
+  argumentsFragments?: string[];
+  callId?: string;
+  index?: number;
+} = {}): FakeRound {
+  const {
+    toolName = "calculator",
+    argumentsFragments = ['{"expression":', '"1+1"}'],
+    callId = "call_1",
+    index = 0,
+  } = options;
+
+  const frames: string[] = [];
+  frames.push(
+    toolCallFrame({ index, id: callId, type: "function", function: { name: toolName, arguments: "" } }),
+  );
+  for (const fragment of argumentsFragments) {
+    frames.push(toolCallFrame({ index, function: { arguments: fragment } }));
+  }
+  frames.push(finishFrame("tool_calls"), doneFrame());
+
+  return {
+    name: "tool-request-without-text",
+    frames,
+    toolCallCount: 1,
+    hasDoneMarker: true,
+    finishReason: "tool_calls",
+  };
+}
+
+/**
+ * `finish_reason: "stop"` on a round that **also** carried tool-call fragments —
+ * the contradictory "`stop` + fragments" row of contract §6. `toolCallCount` counts
+ * the fragments that are on the wire even though today's parser drops them, which
+ * is exactly the silent success Step 59 turns into a typed integrity failure.
+ */
+export function stopWithStrayToolCallFragmentsRound(options: {
+  text?: string;
+  toolName?: string;
+  argumentsFragments?: string[];
+  callId?: string;
+} = {}): FakeRound {
+  const {
+    text = "The answer is 4.",
+    toolName = "calculator",
+    argumentsFragments = ['{"expression":', '"1+1"}'],
+    callId = "call_1",
+  } = options;
+
+  const frames: string[] = [contentFrame(text)];
+  frames.push(
+    toolCallFrame({ index: 0, id: callId, type: "function", function: { name: toolName, arguments: "" } }),
+  );
+  for (const fragment of argumentsFragments) {
+    frames.push(toolCallFrame({ index: 0, function: { arguments: fragment } }));
+  }
+  frames.push(finishFrame("stop"), doneFrame());
+
+  return {
+    name: "stop-with-tool-call-fragments",
+    frames,
+    toolCallCount: 1,
+    hasDoneMarker: true,
+    finishReason: "stop",
+  };
+}
+
 /** A round whose only text arrives while `finish_reason` is `length` (truncated). */
 export function truncatedOutputRound(text = "The answer is definitely"): FakeRound {
   const frames = [contentFrame(text, "length"), doneFrame()];
   return { name: "length", frames, toolCallCount: 0, hasDoneMarker: true, finishReason: "length" };
+}
+
+/**
+ * `finish_reason: "length"` on a round that also carried tool-call fragments —
+ * the other contradictory completion shape of contract §6 (`length` or
+ * `content_filter` with fragments). Same silent success as the `stop` variant: the fragments are on
+ * the wire, today's parser drops them, and the round reads as ordinary truncated
+ * text. Step 59 owns the typed rejection.
+ */
+export function lengthWithStrayToolCallFragmentsRound(options: {
+  text?: string;
+  toolName?: string;
+  argumentsFragments?: string[];
+  callId?: string;
+} = {}): FakeRound {
+  const {
+    text = "It continues but ran out of",
+    toolName = "fetch_url",
+    argumentsFragments = ['{"url":', '"https://example.com"}'],
+    callId = "call_truncated",
+  } = options;
+
+  const frames: string[] = [contentFrame(text)];
+  frames.push(
+    toolCallFrame({ index: 0, id: callId, type: "function", function: { name: toolName, arguments: "" } }),
+  );
+  for (const fragment of argumentsFragments) {
+    frames.push(toolCallFrame({ index: 0, function: { arguments: fragment } }));
+  }
+  frames.push(finishFrame("length"), doneFrame());
+
+  return {
+    name: "length-with-tool-call-fragments",
+    frames,
+    toolCallCount: 1,
+    hasDoneMarker: true,
+    finishReason: "length",
+  };
 }
 
 /**

@@ -29,15 +29,20 @@ import type { Tool, ToolRegistry } from "../../tools/types.js";
 import { AppError } from "../../utils/errorHandler.js";
 import {
   answerRound,
+  answerRoundWithNullCharacters,
   answerRoundWithoutDoneMarker,
   answerRoundWithoutFinishReason,
+  answerRoundWithoutFinishReasonProperty,
   contradictoryToolCallsRound,
   contentFrame,
   doneFrame,
+  finishFrame,
   framesToText,
   splitBytes,
+  stopWithStrayToolCallFragmentsRound,
   threeToolsThenFinalRounds,
   toolRequestRound,
+  toolRequestRoundWithoutText,
   truncatedOutputRound,
   type FakeRound,
 } from "../../provider/__tests__/fixtures/fakeProviderStream.js";
@@ -359,6 +364,74 @@ describe("ChatOrchestrator — abnormal completions", () => {
     expect(textOf(events)).toBe("The answer is definitely");
   });
 
+  it("drops stray tool-call fragments from a stop round and answers without running the tool", async () => {
+    // Contract §6 "stop + fragments" row. Today the contradictory completion is a
+    // silent success: the parser drops the fragments, so the orchestrator has no
+    // tool call to validate and flushes the text as a normal answer. Step 59 must
+    // reject the shape without ever executing the incomplete call.
+    const calculator = createFakeTool("calculator");
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient([stopWithStrayToolCallFragmentsRound({ text: "The answer is 4." })]).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("calculate")],
+        tools: createRegistry([calculator]),
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["delta", "done"]);
+    expect(textOf(events)).toBe("The answer is 4.");
+    for (const lifecycle of ["tool_start", "tool_end", "sources"]) {
+      expect(typesOf(events)).not.toContain(lifecycle);
+    }
+    // Provably never executed: the guarantee is the tool call count, not the text.
+    expect(calculator.execute).not.toHaveBeenCalled();
+  });
+
+  it("runs a tool round that streamed no text at all", async () => {
+    // A textless tool round is legal today and must stay legal in v1.3.0: no
+    // provisional text exists, so step 60 must not fabricate a `preview_delta`
+    // for it and step 61 must not emit a `preview_discard` that never had a
+    // preview (contract §7). This turn has no text before the tool boundary.
+    const script = [toolRequestRoundWithoutText({ callId: "call_textless" }), answerRound("The result is 2.5.")];
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient(script).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("divide 5 by 2")],
+        tools: createRegistry([createFakeTool("calculator")]),
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["tool_start", "tool_end", "sources", "delta", "done"]);
+    expect(textOf(events)).toBe("The result is 2.5.");
+    // Nothing empty or invented travels before the tool boundary.
+    expect(events.filter((event) => event.type === "delta" && (event.text ?? "") === "")).toEqual([]);
+  });
+
+  it("ends a clean round that produced neither text nor a tool call with one done", async () => {
+    // The empty-answer shape of contract §7: a clean round with no text. v1.2.0
+    // emits a single terminal event and nothing else — no delta, no sources, no
+    // fabricated text. v1.3.0 keeps exactly one terminal here (step 62) without
+    // inventing preview events for text that never existed.
+    const emptyRound: FakeRound = {
+      name: "textless-clean-final-round",
+      frames: [finishFrame("stop"), doneFrame()],
+      toolCallCount: 0,
+      hasDoneMarker: true,
+      finishReason: "stop",
+    };
+
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient([emptyRound]).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("say nothing")],
+        tools: createRegistry([createFakeTool("calculator")]),
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["done"]);
+    expect(textOf(events)).toBe("");
+  });
+
   it("counts rounds and never exceeds the caps when the model keeps calling tools", async () => {
     // Every round requests another tool. After MAX_TOOL_EXECUTIONS_PER_TURN the
     // last round is forced with no tools, and a stray tool call there is a
@@ -394,6 +467,89 @@ describe("ChatOrchestrator — abnormal completions", () => {
     expect(textOf(events)).toBe("One more step. ");
     expect(error).toBeInstanceOf(AppError);
     expect((error as AppError).code).toBe("TOOL_CALL_LIMIT_EXCEEDED");
+  });
+});
+
+// ── Sanitization and a genuinely missing finish_reason property ────────────
+
+describe("ChatOrchestrator — null characters and an omitted finish_reason property", () => {
+  /** The `text` of every `delta` the orchestrator emitted, in order. */
+  function deltaTextsOf(events: Array<{ type: string; text?: string }>): string[] {
+    return events.filter((event) => event.type === "delta").map((event) => event.text ?? "");
+  }
+
+  it("streams a null-character answer with every NUL removed", async () => {
+    const round = answerRoundWithNullCharacters(["a\u0000b", "c\u0000d"]);
+    // Non-vacuous check: JSON escaping puts a six-character backslash-u-0000
+    // sequence on the wire, so the fixture really carries a NUL to sanitize.
+    expect(framesToText(round.frames)).toContain("\\u0000");
+
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient([round]).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("hi")],
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["delta", "delta", "done"]);
+    expect(deltaTextsOf(events)).toEqual(["ab", "cd"]);
+    expect(JSON.stringify(events)).not.toContain("\u0000");
+  });
+
+  it("flushes a null-character answer after a tool round with every NUL removed", async () => {
+    // The buffered path is where v1.3.0 moves the flush into a preview commit, so
+    // sanitization has to hold there as well as on the live path.
+    const round = answerRoundWithNullCharacters(["x\u0000y", "z\u0000w"]);
+    const script = [toolRequestRoundWithoutText({ callId: "call_1" }), round];
+
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient(script).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("calculate")],
+        tools: createRegistry([createFakeTool("calculator")]),
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["tool_start", "tool_end", "sources", "delta", "delta", "done"]);
+    expect(deltaTextsOf(events)).toEqual(["xy", "zw"]);
+    expect(JSON.stringify(events)).not.toContain("\u0000");
+  });
+
+  it("treats a completely omitted finish_reason property as a normal answer", async () => {
+    const round = answerRoundWithoutFinishReasonProperty("Sunny tomorrow.");
+    // Distinct from `answerRoundWithoutFinishReason`, which always writes the key
+    // with a null value: this round never mentions `finish_reason` at all.
+    expect(framesToText(round.frames)).not.toContain("finish_reason");
+
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient([round]).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("weather?")],
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["delta", "done"]);
+    expect(textOf(events)).toBe("Sunny tomorrow.");
+  });
+
+  it("treats an omitted finish_reason property as complete on the forced final round", async () => {
+    // The buffered side of the same guarantee: after a tool round, a final answer
+    // with no `finish_reason` key anywhere still flushes and terminates normally.
+    const script = [
+      toolRequestRoundWithoutText({ callId: "call_1" }),
+      answerRoundWithoutFinishReasonProperty("The result is correct."),
+    ];
+
+    const events = await collect(
+      new ChatOrchestrator(createScriptedClient(script).client).stream({
+        providerConfig: CONFIG,
+        messages: [userMessage("calculate")],
+        tools: createRegistry([createFakeTool("calculator")]),
+      }),
+    );
+
+    expect(typesOf(events)).toEqual(["tool_start", "tool_end", "sources", "delta", "done"]);
+    expect(textOf(events)).toBe("The result is correct.");
   });
 });
 

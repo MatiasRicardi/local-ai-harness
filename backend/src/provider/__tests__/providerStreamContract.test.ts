@@ -21,17 +21,23 @@ import {
 import { type SseEvent } from "../sseParser.js";
 import {
   answerRound,
+  answerRoundWithNullCharacters,
   answerRoundWithoutDoneMarker,
   answerRoundWithoutFinishReason,
+  answerRoundWithoutFinishReasonProperty,
   collectEvents,
   contentFrame,
+  contentFrameOmittingFinishReason,
   contradictoryToolCallsRound,
   doneFrame,
   framesToText,
+  lengthWithStrayToolCallFragmentsRound,
   parseRound,
   readerFromText,
+  stopWithStrayToolCallFragmentsRound,
   threeToolsThenFinalRounds,
   toolRequestRound,
+  toolRequestRoundWithoutText,
   truncatedMidFrameRound,
   truncatedOutputRound,
 } from "./fixtures/fakeProviderStream.js";
@@ -81,11 +87,15 @@ describe("Fake-provider fixtures are deterministic", () => {
     const rounds = [
       answerRound(),
       answerRoundWithoutFinishReason(),
+      answerRoundWithoutFinishReasonProperty(),
+      answerRoundWithNullCharacters(),
       answerRoundWithoutDoneMarker(),
       truncatedMidFrameRound(),
       truncatedOutputRound(),
       contradictoryToolCallsRound(),
+      stopWithStrayToolCallFragmentsRound(),
       toolRequestRound(),
+      toolRequestRoundWithoutText(),
     ];
 
     for (const round of rounds) {
@@ -140,6 +150,18 @@ describe("Baseline: [DONE] marker vs transport EOF", () => {
     expect(typesOf(events)).toEqual(["delta", "done"]);
     expect(textOf(events)).toBe("Sunny tomorrow.");
   });
+
+  it("accepts [DONE] when the finish_reason property is missing from every chunk", async () => {
+    // Distinct from the case above: `contentFrame` always writes the key, so a
+    // suite that only ever sent `"finish_reason": null` would never have tested
+    // a provider that omits the property at all. This round sends no such key.
+    const round = answerRoundWithoutFinishReasonProperty("Sunny tomorrow.");
+    const events = await collectEvents(readerFromText(framesToText(round.frames)));
+
+    expect(typesOf(events)).toEqual(["delta", "done"]);
+    expect(textOf(events)).toBe("Sunny tomorrow.");
+    expect(framesToText(round.frames)).not.toContain("finish_reason");
+  });
 });
 
 // ── finish_reason is opaque today (gap Step 58 closes) ──────────────────────
@@ -174,6 +196,49 @@ describe("Baseline: finish_reason is not surfaced by the parser", () => {
     // must not be treated as a clean completion once preview events exist.
     expect(round.finishReason).toBe("length");
     expect(typesOf(events)).toEqual(["delta", "done"]);
+  });
+
+  it("drops the fragments of a length round and reports ordinary truncated text", async () => {
+    // The other contradictory completion shape of contract §6: `length` together
+    // with stray tool-call fragments. The parser drops the fragments and ends the
+    // round as plain (truncated) text — no tool event, no error. Step 59 turns it
+    // into a typed chunk-integrity failure.
+    const round = lengthWithStrayToolCallFragmentsRound({ text: "It continues but ran out of" });
+    const events = await collectEvents(readerFromText(framesToText(round.frames)));
+
+    expect(round.finishReason).toBe("length");
+    expect(round.toolCallCount).toBe(1);
+    expect(typesOf(events)).toEqual(["delta", "done"]);
+    expect(textOf(events)).toBe("It continues but ran out of");
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "tool_calls" }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
+  it("parses an omitted finish_reason property exactly like an explicit null one", async () => {
+    const text = "Sunny tomorrow.";
+    const explicitNull = await collectEvents(
+      readerFromText(framesToText([contentFrame(text), doneFrame()])),
+    );
+    const omitted = await collectEvents(
+      readerFromText(framesToText([contentFrameOmittingFinishReason(text), doneFrame()])),
+    );
+
+    // The parser never inspects a missing or null reason, so both wire shapes end
+    // at `[DONE]` identically. Step 58 may type a missing reason as a gap, but it
+    // may not decide the two shapes apart silently at this layer.
+    expect(omitted).toEqual(explicitNull);
+    expect(typesOf(explicitNull)).toEqual(["delta", "done"]);
+  });
+
+  it("sends the two missing-reason shapes as genuinely different bytes", () => {
+    // Why this test exists: the previous test would also pass if both fixtures
+    // collapsed to the same payload, so the wire difference is asserted here
+    // (JSON escaping puts the NUL out of reach of this comparison, not the key).
+    const explicit = framesToText(answerRoundWithoutFinishReason("x").frames);
+    const omitted = framesToText(answerRoundWithoutFinishReasonProperty("x").frames);
+
+    expect(explicit).toContain('"finish_reason":null');
+    expect(omitted).not.toContain("finish_reason");
   });
 });
 
@@ -211,6 +276,63 @@ describe("Baseline: tool-call fragments", () => {
     // contract forbids committing a preview on it; Step 59 owns the rejection.
     expect(typesOf(events)).toEqual(["done"]);
     expect(events.some((event) => event.type === "tool_calls")).toBe(false);
+  });
+
+  it("drops the fragments of a stop round and completes it as a plain answer", async () => {
+    const round = stopWithStrayToolCallFragmentsRound({ text: "The answer is 4." });
+    const events = await collectEvents(readerFromText(framesToText(round.frames)));
+
+    // The contract §6 "stop + fragments" row: today the contradictory shape is a
+    // silent success — the fragments never reach the caller and the text answer
+    // completes normally. Step 59 must turn it into a typed integrity failure
+    // without ever executing the incomplete call.
+    expect(round.toolCallCount).toBe(1);
+    expect(round.finishReason).toBe("stop");
+    expect(typesOf(events)).toEqual(["delta", "done"]);
+    expect(textOf(events)).toBe("The answer is 4.");
+    expect(events.some((event) => event.type === "tool_calls")).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  it("assembles a tool round that streamed no text at all", async () => {
+    const round = toolRequestRoundWithoutText();
+    const { single, sliced } = await parseRound(round);
+
+    // A textless tool round is legal today and stays legal in v1.3.0: the parse
+    // is a `tool_calls` event and a `done`, with no delta of any kind in between.
+    expect(typesOf(single)).toEqual(["tool_calls", "done"]);
+    expect(textOf(single)).toBe("");
+    if (single[0].type !== "tool_calls") {
+      throw new Error("expected a tool_calls event");
+    }
+    expect(single[0].toolCalls).toEqual([
+      {
+        index: 0,
+        id: "call_1",
+        type: "function",
+        function: { name: "calculator", arguments: '{"expression":"1+1"}' },
+      },
+    ]);
+    expect(sliced).toEqual(single);
+  });
+});
+
+// ── Null characters: the parser forwards them, the SSE layers must not ──────
+
+describe("Baseline: provider text containing U+0000", () => {
+  it("forwards the null character so the layer above owns sanitization", async () => {
+    const round = answerRoundWithNullCharacters();
+    const events = await collectEvents(readerFromText(framesToText(round.frames)));
+
+    // `JSON.stringify` escapes the NUL, so the fixture bytes contain `\u0000` as
+    // six visible characters while the parsed text contains the real one. This
+    // test pins where the guarantee lives: the parser is not the sanitizer. The
+    // browser-visible guarantee (no NUL may be emitted) is locked at the
+    // orchestrator and route layers, where `sanitizeSseData` runs.
+    const text = textOf(events);
+    expect(text).toContain("\u0000");
+    expect(text).toBe("2 + 2 = \u0000 4I am \u0000 sure.");
+    expect(typesOf(events)).toEqual(["delta", "delta", "done"]);
   });
 });
 
