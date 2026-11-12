@@ -217,6 +217,8 @@ I still made the product decisions, defined the requirements, reviewed the chang
 If you want to look deeper into how the project works:
 
 - [Architecture](docs/architecture.md)
+- [v1.3.0 target contract](docs/v1.3.0-contract.md) — planned behavior for the next
+  release; not implemented in the current one
 - [Security](docs/security.md)
 - [Docker](docs/docker.md)
 - [Smoke test](docs/smoke-test.md)

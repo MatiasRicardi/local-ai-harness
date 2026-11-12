@@ -468,8 +468,11 @@ Consequences for what the user sees:
   progressive immediately, unchanged from v1.0.0.
 
 The buffering is intentional, not a regression: it avoids leaking preliminary,
-soon-discarded text. Reworking the orchestration to stream the first round live
-while still suppressing filler is a planned follow-up, not a v1.1.0 change.
+soon-discarded text. Reworking the orchestration to stream each round live while
+still suppressing filler is a planned follow-up, not a v1.1.0 change: the binding
+target contract for that replacement lives in
+[v1.3.0 target contract](v1.3.0-contract.md) and is **not** implemented in this
+release.
 
 ## Built-in tools
 

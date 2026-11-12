@@ -236,6 +236,52 @@ describe("streamChat", () => {
     expect(callbacks.onDone).not.toHaveBeenCalled()
   })
 
+  it("treats a transport EOF with no terminal event as success (baseline inverted by step 63)", async () => {
+    const callbacks = noopCallbacks()
+    // The backend closed the stream without ever sending `done` or `error`.
+    // v1.2.0 reports this as success; step 63 inverts exactly this case into a
+    // failure that must not present a truncated answer as complete. Locked here
+    // so that inverting it stays a deliberate, reviewed change.
+    const sse = [
+      "event: start\ndata: {\"model\":\"local-model\"}\n\n",
+      "event: delta\ndata: {\"text\":\"Half an answer\"}\n\n",
+    ].join("")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    expect(callbacks.onDelta).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+    expect(callbacks.onStopped).not.toHaveBeenCalled()
+  })
+
+  it("ignores the preview event names the client does not implement yet", async () => {
+    // Steps 60-62 add preview_delta / preview_commit / preview_discard on the
+    // wire. Until step 63 teaches the client about them, an unknown event must
+    // be skipped silently: no text, no error, and the turn still terminates
+    // normally, so the backend can ship the events before the frontend reads
+    // them. `preview_delta` must never reach onDelta by accident.
+    const callbacks = noopCallbacks()
+    const sse = [
+      "event: start\ndata: {\"model\":\"local-model\"}\n\n",
+      "event: preview_delta\ndata: {\"roundId\":1,\"text\":\"provisional\"}\n\n",
+      "event: preview_commit\ndata: {\"roundId\":1}\n\n",
+      "event: preview_discard\ndata: {\"roundId\":1,\"reason\":\"tool_call\"}\n\n",
+      "event: delta\ndata: {\"text\":\"Final\"}\n\n",
+      "event: done\ndata: {}\n\n",
+    ].join("")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    expect(callbacks.onDelta).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDelta).toHaveBeenCalledWith("Final")
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+    expect(callbacks.onStopped).not.toHaveBeenCalled()
+  })
+
   it("calls onError (not throw) for an HTTP error response before the stream starts", async () => {
     const callbacks = noopCallbacks()
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
