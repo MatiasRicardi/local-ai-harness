@@ -236,6 +236,87 @@ describe("streamChat", () => {
     expect(callbacks.onDone).not.toHaveBeenCalled()
   })
 
+  it("treats a transport EOF with no terminal event as success (baseline inverted by step 63)", async () => {
+    const callbacks = noopCallbacks()
+    // The backend closed the stream without ever sending `done` or `error`.
+    // v1.2.0 reports this as success; step 63 inverts exactly this case into a
+    // failure that must not present a truncated answer as complete. Locked here
+    // so that inverting it stays a deliberate, reviewed change.
+    const sse = [
+      "event: start\ndata: {\"model\":\"local-model\"}\n\n",
+      "event: delta\ndata: {\"text\":\"Half an answer\"}\n\n",
+    ].join("")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    expect(callbacks.onDelta).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+    expect(callbacks.onStopped).not.toHaveBeenCalled()
+  })
+
+  it("ignores the preview event names the client does not implement yet", async () => {
+    // Steps 60-62 add preview_delta / preview_commit / preview_discard on the
+    // wire. Until step 63 teaches the client about them, an unknown event must
+    // be skipped silently: no text, no error, and the turn still terminates
+    // normally. `preview_delta` must never reach onDelta by accident. Ignoring
+    // them is safe for the *transport*; whether the turn still shows its answer
+    // is the other test below, which is why the contract pairs the emitting
+    // backend and the reading frontend in one release.
+    const callbacks = noopCallbacks()
+    const sse = [
+      "event: start\ndata: {\"model\":\"local-model\"}\n\n",
+      "event: preview_delta\ndata: {\"roundId\":1,\"text\":\"provisional\"}\n\n",
+      "event: preview_commit\ndata: {\"roundId\":1}\n\n",
+      "event: preview_discard\ndata: {\"roundId\":1,\"reason\":\"tool_call\"}\n\n",
+      "event: delta\ndata: {\"text\":\"Final\"}\n\n",
+      "event: done\ndata: {}\n\n",
+    ].join("")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    expect(callbacks.onDelta).toHaveBeenCalledTimes(1)
+    expect(callbacks.onDelta).toHaveBeenCalledWith("Final")
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onError).not.toHaveBeenCalled()
+    expect(callbacks.onStopped).not.toHaveBeenCalled()
+  })
+
+  it("has no answer text to render when a turn streams its answer only as preview text (characterization)", async () => {
+    // The other side of ignoring `preview_*`. A v1.3.0 backend can complete a
+    // tool-enabled turn whose answer text travelled only through preview events,
+    // so a client that does not know those names receives a well-formed turn
+    // (no throw, no error, exactly one onDone) with **nothing to render** — the
+    // assistant message ends up empty. That is the documented consequence of the
+    // contract's "Who may receive them" rule: a preview-emitting backend must be
+    // paired with a preview-aware frontend. Do not "fix" it here by replaying
+    // preview text as a `delta`; that would need a buffered flush the contract
+    // forbids.
+    const callbacks = noopCallbacks()
+    const sse = [
+      "event: start\ndata: {\"model\":\"local-model\"}\n\n",
+      "event: tool_start\ndata: {\"callId\":\"1\",\"tool\":\"calculator\"}\n\n",
+      "event: tool_end\ndata: {\"callId\":\"1\",\"status\":\"ok\"}\n\n",
+      "event: sources\ndata: {\"sources\":[]}\n\n",
+      "event: preview_delta\ndata: {\"roundId\":2,\"text\":\"The result \"}\n\n",
+      "event: preview_delta\ndata: {\"roundId\":2,\"text\":\"is 4.\"}\n\n",
+      "event: preview_commit\ndata: {\"roundId\":2}\n\n",
+      "event: done\ndata: {}\n\n",
+    ].join("")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(sseStream([sse]))))
+
+    await streamChat([], provider, callbacks as unknown as StreamCallbacks)
+
+    // No text ever reaches this client: `delta` is the only text channel it knows.
+    expect(callbacks.onDelta).not.toHaveBeenCalled()
+    // The turn is still a normal success from this client's point of view.
+    expect(callbacks.onDone).toHaveBeenCalledTimes(1)
+    expect(callbacks.onStopped).not.toHaveBeenCalled()
+    expect(callbacks.onError).not.toHaveBeenCalled()
+  })
+
   it("calls onError (not throw) for an HTTP error response before the stream starts", async () => {
     const callbacks = noopCallbacks()
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
